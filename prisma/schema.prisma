@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String             @id @default(cuid())
+  email          String             @unique
+  name           String?
+  passwordHash   String
+  isVerified     Boolean            @default(false)
+  masterKeySalt  String
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  channels       Channel[]
+  apiKeys        ApiKey[]
+  verificationTokens VerificationToken[]
+  encryptionLogs EncryptionLog[]
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Channel {
+  id          String           @id @default(cuid())
+  name        String
+  description String?
+  adminId     String
+  encryptedKey      String
+  apiEncryptedKey  String
+  rounds            Int              @default(4)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  admin       User             @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  encryptionLogs EncryptionLog[]
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  name      String
+  keyHash   String   @unique
+  keyPrefix String
+  userId    String
+  lastUsed  DateTime?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model EncryptionLog {
+  id        String   @id @default(cuid())
+  action    String
+  channelId String
+  userId    String
+  inputLen  Int
+  outputLen Int
+  createdAt DateTime @default(now())
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
