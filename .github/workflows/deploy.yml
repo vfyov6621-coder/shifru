@@ -43,21 +43,10 @@ jobs:
 
       - name: Prepare deploy folder
         run: |
-          # Next.js с basePath создаёт .next/<basePath>/
-          # GitHub Pages уже даёт /shifru/, поэтому берём содержимое .next/shifru/
-          REPO_NAME="${{ github.event.repository.name }}"
-          if [ -d ".next/$REPO_NAME" ]; then
-            mv ".next/$REPO_NAME" _site
-          else
-            mv .next _site
-          fi
-          # Копируем _next/ ресурсы если они на уровень выше
-          if [ -d ".next/_next" ] && [ ! -d "_site/_next" ]; then
-            cp -r ".next/_next" "_site/_next"
-          fi
-          # 404 для SPA routing
-          cp _site/index.html _site/404.html 2>/dev/null || true
-          ls -la _site/
+          # Next.js static export outputs to out/
+          # Copy 404.html for SPA client-side routing
+          cp out/404.html out/404.bak 2>/dev/null || true
+          ls -la out/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -65,7 +54,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: out
 
       - name: Deploy to GitHub Pages
         id: deployment
