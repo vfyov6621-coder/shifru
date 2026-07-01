@@ -36,7 +36,6 @@ export async function verifyPassword(hashedPassword: string, plainPassword: stri
   try {
     const serviceEncrypted = encryptPasswordThroughService(plainPassword);
     const parts = hashedPassword.split('$');
-    // $scrypt$N$r$p$salt$hash
     if (parts.length !== 7 || parts[1] !== 'scrypt') return false;
     const N = parseInt(parts[2]);
     const r = parseInt(parts[3]);
