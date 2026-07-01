@@ -1,0 +1,799 @@
+    81→  // Rate limits
+    82→  const [dailyLeft, setDailyLeft] = useState(90000);
+    83→  const [monthlyLeft, setMonthlyLeft] = useState(200000);
+    84→
+    85→  const headers = () => ({ Authorization: `Bearer ${session?.token}`, 'Content-Type': 'application/json' });
+    86→
+    87→  useEffect(() => {
+    88→    const s = localStorage.getItem('shifru');
+    89→    if (s) {
+    90→      try {
+    91→        const p = JSON.parse(s);
+    92→        setSession(p);
+    93→        setView('app');
+    94→      } catch { /* ignore */ }
+    95→    }
+    96→  }, []);
+    97→
+    98→  const load = useCallback(async () => {
+    99→    if (!session) return;
+   100→    try {
+   101→      const [c, k, m] = await Promise.all([
+   102→        fetch('/api/channels', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+   103→        fetch('/api/api-keys', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+   104→        fetch('/api/me', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+   105→      ]);
+   106→      setChats(c.chats || []);
+   107→      setApiKeys(k.keys || []);
+   108→      if (m.user) {
+   109→        setSession(prev => prev ? { ...prev, user: { ...prev.user, isVerified: m.user.isVerified, isAdmin: m.user.isAdmin } } : null);
+   110→      }
+   111→      if (m.rateLimits) {
+   112→        setDailyLeft(m.rateLimits.dailyRemaining);
+   113→        setMonthlyLeft(m.rateLimits.monthlyRemaining);
+   114→      }
+   115→    } catch (e) { console.error(e); }
+   116→  }, [session]);
+   117→
+   118→  useEffect(() => { if (view === 'app' && session) load(); }, [view, session, load]);
+   119→
+   120→  const loadAdminUsers = useCallback(async () => {
+   121→    if (!session?.isAdmin) return;
+   122→    setAdminLoading(true);
+   123→    try {
+   124→      const res = await fetch('/api/admin/users', { headers: { Authorization: `Bearer ${session.token}` } });
+   125→      const data = await res.json();
+   126→      setAdminUsers(data.users || []);
+   127→    } catch { /* ignore */ }
+   128→    setAdminLoading(false);
+   129→  }, [session]);
+   130→
+   131→  useEffect(() => { if (tab === 'admin' && session?.isAdmin) loadAdminUsers(); }, [tab, session, loadAdminUsers]);
+   132→
+   133→  // User search for chat members
+   134→  const searchUsers = useCallback(async (q: string) => {
+   135→    setUserSearch(q);
+   136→    if (q.length < 1 || !session) { setSearchResults([]); return; }
+   137→    try {
+   138→      const res = await fetch(`/api/users?search=${encodeURIComponent(q)}`, {
+   139→        headers: { Authorization: `Bearer ${session.token}` },
+   140→      });
+   141→      const data = await res.json();
+   142→      setSearchResults(data.users || []);
+   143→    } catch { setSearchResults([]); }
+   144→  }, [session]);
+   145→
+   146→  const addMember = (id: string, login: string) => {
+   147→    if (newChatMembers.includes(id)) return;
+   148→    setNewChatMembers(prev => [...prev, id]);
+   149→    setSearchResults(prev => prev.filter(u => u.id !== id));
+   150→    setUserSearch('');
+   151→  };
+   152→
+   153→  const removeMember = (id: string) => {
+   154→    setNewChatMembers(prev => prev.filter(m => m !== id));
+   155→  };
+   156→
+   157→  // Auth
+   158→  const handleAuth = async () => {
+   159→    setLoading(true); setAuthError('');
+   160→    try {
+   161→      const url = isRegister ? '/api/auth/register' : '/api/auth/login';
+   162→      const body = isRegister ? { login, password, password2 } : { login, password };
+   163→      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+   164→      const data = await res.json();
+   165→      if (!res.ok) { setAuthError(data.error); return; }
+   166→      setSession({ token: data.token, user: data.user });
+   167→      localStorage.setItem('shifru', JSON.stringify({ token: data.token, user: data.user }));
+   168→      setView('app');
+   169→      toast({ title: isRegister ? 'Аккаунт создан — ожидайте верификацию' : 'Вход выполнен' });
+   170→    } catch { setAuthError('Ошибка соединения'); } finally { setLoading(false); }
+   171→  };
+   172→
+   173→  // Encrypt
+   174→  const handleEncrypt = async () => {
+   175→    if (!selectedChat || !encInput) return;
+   176→    setOpLoading(true);
+   177→    try {
+   178→      const res = await fetch('/api/encrypt', {
+   179→        method: 'POST', headers: headers(),
+   180→        body: JSON.stringify({ data: encInput, chatId: selectedChat.id, password }),
+   181→      });
+   182→      const data = await res.json();
+   183→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   184→      setEncOutput(data.encrypted);
+   185→      setEncChain(data.chain);
+   186→      setDecInput(data.encrypted);
+   187→      setDecChain(data.chain);
+   188→      setDecOutput('');
+   189→      toast({ title: `Цепочка: ${data.chain.join(' → ')}` });
+   190→      load();
+   191→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
+   192→  };
+   193→
+   194→  // Decrypt
+   195→  const handleDecrypt = async () => {
+   196→    if (!selectedChat || !decInput) return;
+   197→    setOpLoading(true);
+   198→    try {
+   199→      const res = await fetch('/api/decrypt', {
+   200→        method: 'POST', headers: headers(),
+   201→        body: JSON.stringify({ encrypted: decInput, chatId: selectedChat.id, chain: decChain, password }),
+   202→      });
+   203→      const data = await res.json();
+   204→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   205→      setDecOutput(data.decrypted);
+   206→      toast({ title: 'Расшифровано' });
+   207→      load();
+   208→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
+   209→  };
+   210→
+   211→  // Chat CRUD
+   212→  const handleCreateChat = async () => {
+   213→    if (!newChatName.trim()) return;
+   214→    setLoading(true);
+   215→    try {
+   216→      const res = await fetch('/api/channels', {
+   217→        method: 'POST', headers: headers(),
+   218→        body: JSON.stringify({ name: newChatName, password, memberIds: newChatMembers }),
+   219→      });
+   220→      const data = await res.json();
+   221→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   222→      toast({ title: `Чат "${newChatName}" создан` });
+   223→      setNewChatName(''); setNewChatMembers([]); setShowNewChat(false);
+   224→      load();
+   225→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setLoading(false); }
+   226→  };
+   227→
+   228→  const handleDeleteChat = async (id: string) => {
+   229→    await fetch(`/api/channels?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+   230→    toast({ title: 'Чат удалён' });
+   231→    if (selectedChat?.id === id) setSelectedChat(null);
+   232→    load();
+   233→  };
+   234→
+   235→  // API keys
+   236→  const handleCreateKey = async () => {
+   237→    if (!newKeyName.trim()) return;
+   238→    try {
+   239→      const res = await fetch('/api/api-keys', { method: 'POST', headers: headers(), body: JSON.stringify({ name: newKeyName }) });
+   240→      const data = await res.json();
+   241→      if (!res.ok) { toast({ title: 'Ошибка', variant: 'destructive' }); return; }
+   242→      setCreatedKey(data.apiKey); setNewKeyName('');
+   243→      toast({ title: 'API-ключ создан — сохраните его!' });
+   244→      load();
+   245→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); }
+   246→  };
+   247→
+   248→  const handleDeleteKey = async (id: string) => {
+   249→    await fetch(`/api/api-keys?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+   250→    load();
+   251→  };
+   252→
+   253→  // Admin verify
+   254→  const handleVerify = async (userId: string, action: 'verify' | 'unverify') => {
+   255→    try {
+   256→      const res = await fetch('/api/admin/verify', {
+   257→        method: 'POST', headers: headers(),
+   258→        body: JSON.stringify({ userId, action }),
+   259→      });
+   260→      const data = await res.json();
+   261→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   262→      toast({ title: data.message });
+   263→      loadAdminUsers();
+   264→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); }
+   265→  };
+   266→
+   267→  const copy = (text: string) => { navigator.clipboard.writeText(text); toast({ title: 'Скопировано' }); };
+   268→
+   269→  const handleLogout = () => {
+   270→    setSession(null); localStorage.removeItem('shifru'); setView('app');
+   271→    setTimeout(() => setView('auth'), 0);
+   272→    setChats([]); setApiKeys([]); setSelectedChat(null);
+   273→  };
+   274→
+   275→  const isVerified = session?.user.isVerified ?? false;
+   276→  const isAdmin = session?.user.isAdmin ?? false;
+   277→
+   278→  // ============================================================
+   279→  // AUTH VIEW
+   280→  // ============================================================
+   281→  if (view === 'auth') {
+   282→    return (
+   283→      <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+   284→        <div className="w-full max-w-sm">
+   285→          <div className="mb-8 text-center">
+   286→            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full border-2 border-black mb-4">
+   287→              <Shield className="w-5 h-5" />
+   288→            </div>
+   289→            <h1 className="text-xl font-bold tracking-tight">Shifru</h1>
+   290→            <p className="text-xs text-neutral-500 mt-1">Цепочечное шифрование v2</p>
+   291→          </div>
+   292→
+   293→          <Card className="border-black">
+   294→            <CardHeader className="pb-3">
+   295→              <CardTitle className="text-sm font-semibold">{isRegister ? 'Регистрация' : 'Вход'}</CardTitle>
+   296→            </CardHeader>
+   297→            <CardContent className="space-y-3">
+   298→              {authError && <p className="text-xs text-red-600">{authError}</p>}
+   299→
+   300→              {isRegister && (
+   301→                <div>
+   302→                  <label className="text-xs font-medium mb-1 block">Логин</label>
+   303→                  <Input placeholder="username" value={login} onChange={e => setLogin(e.target.value)} className="border-black" />
+   304→                </div>
+   305→              )}
+   306→
+   307→              <div>
+   308→                <label className="text-xs font-medium mb-1 block">{isRegister ? 'Пароль' : 'Логин'}</label>
+   309→                <div className="relative">
+   310→                  <Input
+   311→                    type={isRegister ? (showPass ? 'text' : 'password') : 'text'}
+   312→                    placeholder={isRegister ? 'Минимум 6 символов' : 'username'}
+   313→                    value={isRegister ? password : login}
+   314→                    onChange={e => isRegister ? setPassword(e.target.value) : setLogin(e.target.value)}
+   315→                    className={isRegister ? 'pr-9 border-black' : 'border-black'}
+   316→                  />
+   317→                  {isRegister && (
+   318→                    <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-black">
+   319→                      {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+   320→                    </button>
+   321→                  )}
+   322→                </div>
+   323→              </div>
+   324→
+   325→              {isRegister && (
+   326→                <div>
+   327→                  <label className="text-xs font-medium mb-1 block">Повторите пароль</label>
+   328→                  <Input type="password" placeholder="Повторите пароль" value={password2} onChange={e => setPassword2(e.target.value)} className="border-black" />
+   329→                </div>
+   330→              )}
+   331→
+   332→              <Button onClick={handleAuth}
+   333→                className="w-full bg-black text-white hover:bg-neutral-800"
+   334→                disabled={loading || (isRegister && (!login || !password || !password2)) || (!isRegister && (!login || !password))}>
+   335→                {loading ? '...' : (isRegister ? 'Создать аккаунт' : 'Войти')}
+   336→              </Button>
+   337→
+   338→              <p className="text-center text-xs text-neutral-400">
+   339→                {isRegister ? 'Есть аккаунт?' : 'Нет аккаунта?'}
+   340→                {' '}
+   341→                <button onClick={() => { setIsRegister(!isRegister); setAuthError(''); }} className="underline text-black">
+   342→                  {isRegister ? 'Войти' : 'Зарегистрироваться'}
+   343→                </button>
+   344→              </p>
+   345→            </CardContent>
+   346→          </Card>
+   347→
+   348→          <p className="text-center text-[10px] text-neutral-300 mt-6">Квантово-устойчивое цепочечное шифрование</p>
+   349→        </div>
+   350→      </div>
+   351→    );
+   352→  }
+   353→
+   354→  // ============================================================
+   355→  // APP VIEW
+   356→  // ============================================================
+   357→  const tabs: { key: Tab; label: string; icon: React.ReactNode; show?: boolean }[] = [
+   358→    { key: 'encrypt', label: 'Шифрование', icon: <Lock className="w-3.5 h-3.5" /> },
+   359→    { key: 'chats', label: 'Чаты', icon: <Users className="w-3.5 h-3.5" /> },
+   360→    { key: 'keys', label: 'API-ключи', icon: <Key className="w-3.5 h-3.5" /> },
+   361→    { key: 'admin', label: 'Админ', icon: <Shield className="w-3.5 h-3.5" />, show: isAdmin },
+   362→    { key: 'docs', label: 'Документация', icon: <Terminal className="w-3.5 h-3.5" /> },
+   363→  ];
+   364→
+   365→  return (
+   366→    <div className="min-h-screen flex flex-col bg-white">
+   367→      {/* Header */}
+   368→      <header className="border-b border-neutral-200 bg-white sticky top-0 z-10">
+   369→        <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
+   370→          <div className="flex items-center gap-2">
+   371→            <Shield className="w-4 h-4" />
+   372→            <span className="text-sm font-bold tracking-tight">Shifru</span>
+   373→            {!isVerified && (
+   374→              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-amber-400 text-amber-600">ожидает верификации</Badge>
+   375→            )}
+   376→            {isAdmin && (
+   377→              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-black">admin</Badge>
+   378→            )}
+   379→          </div>
+   380→          <div className="flex items-center gap-3">
+   381→            <span className="text-xs text-neutral-400">{session?.user.login}</span>
+   382→            <button onClick={handleLogout} className="text-neutral-400 hover:text-black">
+   383→              <LogOut className="w-3.5 h-3.5" />
+   384→            </button>
+   385→          </div>
+   386→        </div>
+   387→      </header>
+   388→
+   389→      {/* Tabs */}
+   390→      <nav className="border-b border-neutral-200 bg-white">
+   391→        <div className="max-w-5xl mx-auto px-4 flex gap-0">
+   392→          {tabs.filter(t => t.show !== false).map(t => (
+   393→            <button
+   394→              key={t.key}
+   395→              onClick={() => setTab(t.key)}
+   396→              className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+   397→                tab === t.key ? 'border-black text-black' : 'border-transparent text-neutral-400 hover:text-black'
+   398→              }`}>
+   399→              {t.icon}
+   400→              {t.label}
+   401→            </button>
+   402→          ))}
+   403→        </div>
+   404→      </nav>
+   405→
+   406→      {/* Content */}
+   407→      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+   408→        {/* Not verified warning */}
+   409→        {!isVerified && tab !== 'admin' && (
+   410→          <div className="mb-4 p-3 border border-neutral-200 bg-neutral-50 text-xs text-neutral-500">
+   411→            Ваш аккаунт ожидает верификации администратором. Шифрование и дешифровка будут доступны после подтверждения.
+   412→          </div>
+   413→        )}
+   414→
+   415→        {/* ============ ENCRYPT TAB ============ */}
+   416→        {tab === 'encrypt' && (
+   417→          <div className="space-y-6">
+   418→            {/* Chat selector */}
+   419→            <div>
+   420→              <label className="text-xs font-medium mb-2 block">Чат / Канал</label>
+   421→              {chats.length === 0 ? (
+   422→                <p className="text-xs text-neutral-400">Нет чатов. Создайте чат во вкладке &quot;Чаты&quot;.</p>
+   423→              ) : (
+   424→                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+   425→                  {chats.map(c => (
+   426→                    <button
+   427→                      key={c.id}
+   428→                      onClick={() => setSelectedChat(c)}
+   429→                      className={`p-2.5 border text-left text-xs transition-colors ${
+   430→                        selectedChat?.id === c.id ? 'border-black bg-black text-white' : 'border-neutral-200 hover:border-black'
+   431→                      }`}>
+   432→                      <div className="font-medium truncate">{c.name}</div>
+   433→                      <div className="opacity-60 mt-0.5 flex items-center gap-1">
+   434→                        <Users className="w-2.5 h-2.5" />
+   435→                        {c._count.members}
+   436→                        {c.isGroup && <Badge variant="outline" className="text-[9px] px-1 py-0 ml-1">группа</Badge>}
+   437→                      </div>
+   438→                    </button>
+   439→                  ))}
+   440→                </div>
+   441→              )}
+   442→            </div>
+   443→
+   444→            {selectedChat && (
+   445→              <>
+   446→                <Separator />
+   447→
+   448→                {/* Encrypt block */}
+   449→                <div className="grid md:grid-cols-2 gap-4">
+   450→                  <Card className="border-neutral-200">
+   451→                    <CardHeader className="pb-2">
+   452→                      <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+   453→                        <Lock className="w-3.5 h-3.5" /> Шифрование
+   454→                      </CardTitle>
+   455→                    </CardHeader>
+   456→                    <CardContent className="space-y-3">
+   457→                      <textarea
+   458→                        value={encInput}
+   459→                        onChange={e => setEncInput(e.target.value)}
+   460→                        placeholder="Введите текст для шифрования..."
+   461→                        className="w-full h-24 p-2.5 text-xs border border-neutral-200 rounded resize-none focus:outline-none focus:border-black"
+   462→                      />
+   463→                      {encChain.length > 0 && (
+   464→                        <div className="flex flex-wrap gap-1">
+   465→                          {encChain.map((m, i) => (
+   466→                            <span key={i} className="text-[10px] px-1.5 py-0.5 border border-neutral-200 font-mono">{m}</span>
+   467→                          ))}
+   468→                        </div>
+   469→                      )}
+   470→                      <Button
+   471→                        onClick={handleEncrypt}
+   472→                        disabled={opLoading || !encInput || !isVerified}
+   473→                        size="sm"
+   474→                        className="w-full bg-black text-white hover:bg-neutral-800 text-xs"
+   475→                      >
+   476→                        {opLoading ? '...' : 'Зашифровать'}
+   477→                      </Button>
+   478→                      {encOutput && (
+   479→                        <div className="relative">
+   480→                          <textarea
+   481→                            value={encOutput}
+   482→                            readOnly
+   483→                            className="w-full h-16 p-2.5 text-[10px] font-mono border border-neutral-200 rounded bg-neutral-50 resize-none"
+   484→                          />
+   485→                          <button onClick={() => copy(encOutput)} className="absolute top-1.5 right-1.5 text-neutral-400 hover:text-black">
+   486→                            <Copy className="w-3 h-3" />
+   487→                          </button>
+   488→                        </div>
+   489→                      )}
+   490→                    </CardContent>
+   491→                  </Card>
+   492→
+   493→                  {/* Decrypt block */}
+   494→                  <Card className="border-neutral-200">
+   495→                    <CardHeader className="pb-2">
+   496→                      <CardTitle className="text-xs font-semibold flex items-center gap-1.5">
+   497→                        <Unlock className="w-3.5 h-3.5" /> Дешифровка
+   498→                      </CardTitle>
+   499→                    </CardHeader>
+   500→                    <CardContent className="space-y-3">
+   501→                      <textarea
+   502→                        value={decInput}
+   503→                        onChange={e => { setDecInput(e.target.value); setDecChain([]); setDecOutput(''); }}
+   504→                        placeholder="Вставьте зашифрованные данные..."
+   505→                        className="w-full h-24 p-2.5 text-[10px] font-mono border border-neutral-200 rounded resize-none focus:outline-none focus:border-black"
+   506→                      />
+   507→                      {decChain.length > 0 && (
+   508→                        <div className="flex flex-wrap gap-1">
+   509→                          {decChain.map((m, i) => (
+   510→                            <span key={i} className="text-[10px] px-1.5 py-0.5 border border-neutral-200 font-mono">{m}</span>
+   511→                          ))}
+   512→                        </div>
+   513→                      )}
+   514→                      <Button
+   515→                        onClick={handleDecrypt}
+   516→                        disabled={opLoading || !decInput || !isVerified}
+   517→                        size="sm"
+   518→                        variant="outline"
+   519→                        className="w-full text-xs"
+   520→                      >
+   521→                        {opLoading ? '...' : 'Дешифровать'}
+   522→                      </Button>
+   523→                      {decOutput && (
+   524→                        <div className="relative">
+   525→                          <textarea
+   526→                            value={decOutput}
+   527→                            readOnly
+   528→                            className="w-full h-16 p-2.5 text-xs border border-neutral-200 rounded bg-neutral-50 resize-none"
+   529→                          />
+   530→                          <button onClick={() => copy(decOutput)} className="absolute top-1.5 right-1.5 text-neutral-400 hover:text-black">
+   531→                            <Copy className="w-3 h-3" />
+   532→                          </button>
+   533→                        </div>
+   534→                      )}
+   535→                    </CardContent>
+   536→                  </Card>
+   537→                </div>
+   538→              </>
+   539→            )}
+   540→          </div>
+   541→        )}
+   542→
+   543→        {/* ============ CHATS TAB ============ */}
+   544→        {tab === 'chats' && (
+   545→          <div className="space-y-4">
+   546→            <div className="flex items-center justify-between">
+   547→              <h2 className="text-sm font-semibold">Чаты</h2>
+   548→              <Button onClick={() => setShowNewChat(!showNewChat)} size="sm" variant="outline" className="text-xs">
+   549→                <Plus className="w-3 h-3 mr-1" /> Новый чат
+   550→              </Button>
+   551→            </div>
+   552→
+   553→            {showNewChat && (
+   554→              <Card className="border-neutral-200">
+   555→                <CardContent className="pt-4 space-y-3">
+   556→                  <div>
+   557→                    <label className="text-xs font-medium mb-1 block">Название чата</label>
+   558→                    <Input
+   559→                      value={newChatName}
+   560→                      onChange={e => setNewChatName(e.target.value)}
+   561→                      placeholder="например: Чат с Ваней"
+   562→                      className="border-neutral-200 text-xs"
+   563→                    />
+   564→                  </div>
+   565→
+   566→                  <div>
+   567→                    <label className="text-xs font-medium mb-1 block">Добавить участников</label>
+   568→                    <div className="relative">
+   569→                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-neutral-400" />
+   570→                      <Input
+   571→                        value={userSearch}
+   572→                        onChange={e => searchUsers(e.target.value)}
+   573→                        placeholder="Поиск по логину..."
+   574→                        className="border-neutral-200 text-xs pl-7"
+   575→                      />
+   576→                    </div>
+   577→                    {searchResults.length > 0 && (
+   578→                      <div className="border border-neutral-200 mt-1 max-h-32 overflow-y-auto">
+   579→                        {searchResults.map(u => (
+   580→                          <button
+   581→                            key={u.id}
+   582→                            onClick={() => addMember(u.id, u.login)}
+   583→                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-neutral-50 border-b border-neutral-100 last:border-0 flex items-center justify-between"
+   584→                          >
+   585→                            <span>{u.login}</span>
+   586→                            <Plus className="w-3 h-3 text-neutral-400" />
+   587→                          </button>
+   588→                        ))}
+   589→                      </div>
+   590→                    )}
+   591→                    {newChatMembers.length > 0 && (
+   592→                      <div className="flex flex-wrap gap-1 mt-2">
+   593→                        {newChatMembers.map(mid => {
+   594→                          const u = searchResults.find(r => r.id === mid);
+   595→                          return (
+   596→                            <Badge key={mid} variant="outline" className="text-[10px] gap-1">
+   597→                              {u?.login || mid}
+   598→                              <button onClick={() => removeMember(mid)} className="hover:text-red-500"><X className="w-2.5 h-2.5" /></button>
+   599→                            </Badge>
+   600→                          );
+   601→                        })}
+   602→                      </div>
+   603→                    )}
+   604→                  </div>
+   605→
+   606→                  <Button onClick={handleCreateChat} disabled={loading || !newChatName.trim()} size="sm" className="bg-black text-white hover:bg-neutral-800 text-xs">
+   607→                    Создать
+   608→                  </Button>
+   609→                </CardContent>
+   610→              </Card>
+   611→            )}
+   612→
+   613→            {chats.length === 0 ? (
+   614→              <p className="text-xs text-neutral-400 py-8 text-center">Нет чатов</p>
+   615→            ) : (
+   616→              <div className="space-y-2">
+   617→                {chats.map(c => (
+   618→                  <div key={c.id} className="border border-neutral-200 p-3 flex items-center justify-between">
+   619→                    <div>
+   620→                      <div className="text-xs font-medium">{c.name}</div>
+   621→                      <div className="text-[10px] text-neutral-400 mt-0.5">
+   622→                        {c.members.map(m => m.login).join(', ')}
+   623→                      </div>
+   624→                      <div className="text-[10px] text-neutral-300 mt-0.5">
+   625→                        {c._count.encryptionLogs} операций
+   626→                      </div>
+   627→                    </div>
+   628→                    <div className="flex items-center gap-2">
+   629→                      {c.isGroup ? (
+   630→                        <Badge variant="outline" className="text-[9px]">группа</Badge>
+   631→                      ) : (
+   632→                        <Badge variant="outline" className="text-[9px]">личный</Badge>
+   633→                      )}
+   634→                      <button onClick={() => handleDeleteChat(c.id)} className="text-neutral-300 hover:text-red-500">
+   635→                        <Trash2 className="w-3.5 h-3.5" />
+   636→                      </button>
+   637→                    </div>
+   638→                  </div>
+   639→                ))}
+   640→              </div>
+   641→            )}
+   642→          </div>
+   643→        )}
+   644→
+   645→        {/* ============ API KEYS TAB ============ */}
+   646→        {tab === 'keys' && (
+   647→          <div className="space-y-4">
+   648→            <div className="flex items-center justify-between">
+   649→              <h2 className="text-sm font-semibold">API-ключи</h2>
+   650→            </div>
+   651→
+   652→            <Card className="border-neutral-200">
+   653→              <CardContent className="pt-4 space-y-3">
+   654→                <div>
+   655→                  <label className="text-xs font-medium mb-1 block">Название ключа</label>
+   656→                  <Input
+   657→                    value={newKeyName}
+   658→                    onChange={e => setNewKeyName(e.target.value)}
+   659→                    placeholder="например: Production"
+   660→                    className="border-neutral-200 text-xs"
+   661→                  />
+   662→                </div>
+   663→                <Button onClick={handleCreateKey} disabled={!newKeyName.trim()} size="sm" className="bg-black text-white hover:bg-neutral-800 text-xs">
+   664→                  Создать ключ
+   665→                </Button>
+   666→              </CardContent>
+   667→            </Card>
+   668→
+   669→            {createdKey && (
+   670→              <Card className="border-black bg-neutral-50">
+   671→                <CardContent className="pt-4 space-y-2">
+   672→                  <p className="text-[10px] text-neutral-500 font-medium">Сохраните этот ключ — он больше не будет показан</p>
+   673→                  <div className="flex items-center gap-2">
+   674→                    <code className="flex-1 text-[10px] font-mono bg-white border border-neutral-200 p-2 rounded break-all">{createdKey}</code>
+   675→                    <button onClick={() => copy(createdKey)} className="text-neutral-400 hover:text-black">
+   676→                      <Copy className="w-3.5 h-3.5" />
+   677→                    </button>
+   678→                  </div>
+   679→                </CardContent>
+   680→              </Card>
+   681→            )}
+   682→
+   683→            {apiKeys.length === 0 ? (
+   684→              <p className="text-xs text-neutral-400 text-center py-4">Нет API-ключей</p>
+   685→            ) : (
+   686→              <div className="space-y-2">
+   687→                {apiKeys.map(k => (
+   688→                  <div key={k.id} className="border border-neutral-200 p-3 flex items-center justify-between">
+   689→                    <div>
+   690→                      <div className="text-xs font-medium">{k.name}</div>
+   691→                      <div className="text-[10px] font-mono text-neutral-400 mt-0.5">{k.keyPrefix}</div>
+   692→                      {k.lastUsed && (
+   693→                        <div className="text-[10px] text-neutral-300 mt-0.5">Последнее использование: {new Date(k.lastUsed).toLocaleDateString('ru')}</div>
+   694→                      )}
+   695→                    </div>
+   696→                    <button onClick={() => handleDeleteKey(k.id)} className="text-neutral-300 hover:text-red-500">
+   697→                      <Trash2 className="w-3.5 h-3.5" />
+   698→                    </button>
+   699→                  </div>
+   700→                ))}
+   701→              </div>
+   702→            )}
+   703→          </div>
+   704→        )}
+   705→
+   706→        {/* ============ ADMIN TAB ============ */}
+   707→        {tab === 'admin' && isAdmin && (
+   708→          <div className="space-y-4">
+   709→            <h2 className="text-sm font-semibold">Управление пользователями</h2>
+   710→
+   711→            {adminLoading ? (
+   712→              <p className="text-xs text-neutral-400">Загрузка...</p>
+   713→            ) : adminUsers.length === 0 ? (
+   714→              <p className="text-xs text-neutral-400 text-center py-4">Нет пользователей</p>
+   715→            ) : (
+   716→              <div className="space-y-2">
+   717→                {adminUsers.map(u => (
+   718→                  <div key={u.id} className="border border-neutral-200 p-3 flex items-center justify-between">
+   719→                    <div>
+   720→                      <div className="text-xs font-medium flex items-center gap-1.5">
+   721→                        {u.login}
+   722→                        {u.isAdmin && <Badge variant="outline" className="text-[9px] px-1 py-0 border-black">admin</Badge>}
+   723→                      </div>
+   724→                      <div className="text-[10px] text-neutral-400 mt-0.5">
+   725→                        {new Date(u.createdAt).toLocaleDateString('ru')} · {u._count.chats} чатов · {u._count.encryptionLogs} операций
+   726→                      </div>
+   727→                    </div>
+   728→                    <div className="flex items-center gap-1">
+   729→                      {u.isVerified ? (
+   730→                        <Button
+   731→                          size="sm"
+   732→                          variant="outline"
+   733→                          className="text-[10px] h-7 px-2"
+   734→                          onClick={() => handleVerify(u.id, 'unverify')}
+   735→                          disabled={u.isAdmin}
+   736→                        >
+   737→                          <UserX className="w-3 h-3 mr-1" /> Снять
+   738→                        </Button>
+   739→                      ) : (
+   740→                        <Button
+   741→                          size="sm"
+   742→                          className="text-[10px] h-7 px-2 bg-black text-white hover:bg-neutral-800"
+   743→                          onClick={() => handleVerify(u.id, 'verify')}
+   744→                        >
+   745→                          <UserCheck className="w-3 h-3 mr-1" /> Верифицировать
+   746→                        </Button>
+   747→                      )}
+   748→                    </div>
+   749→                  </div>
+   750→                ))}
+   751→              </div>
+   752→            )}
+   753→          </div>
+   754→        )}
+   755→
+   756→        {/* ============ DOCS TAB ============ */}
+   757→        {tab === 'docs' && (
+   758→          <div className="space-y-6 max-w-2xl">
+   759→            <div>
+   760→              <h2 className="text-sm font-semibold mb-2">API Documentation</h2>
+   761→              <p className="text-xs text-neutral-500">
+   762→                Shifru предоставляет REST API для шифрования и дешифровки данных.
+   763→                Каждый чат имеет уникальный ключ. Поддерживается авторизация через JWT-токены и API-ключи.
+   764→              </p>
+   765→            </div>
+   766→
+   767→            <div>
+   768→              <h3 className="text-xs font-semibold mb-2">Цепочечное шифрование</h3>
+   769→              <p className="text-xs text-neutral-500 mb-2">
+   770→                Сообщение проходит через случайную цепочку преобразований:
+   771→              </p>
+   772→              <div className="flex flex-wrap gap-1 mb-2">
+   773→                {['unicode', 'binary', 'decimal', 'TLS', 'SSL'].map(m => (
+   774→                  <Badge key={m} variant="outline" className="text-[10px] font-mono">{m}</Badge>
+   775→                ))}
+   776→              </div>
+   777→              <p className="text-xs text-neutral-500">
+   778→                Порядок этапов каждый раз случаен и может содержать от 5 до 10 шагов.
+   779→                Результат оборачивается в AES-256-GCM для квантовой устойчивости.
+   780→                Дешифратор знает порядок и выполняет обратные преобразования.
+   781→              </p>
+   782→            </div>
+   783→
+   784→            <div>
+   785→              <h3 className="text-xs font-semibold mb-2">Лимиты запросов</h3>
+   786→              <div className="grid grid-cols-2 gap-2">
+   787→                <div className="border border-neutral-200 p-3">
+   788→                  <div className="text-lg font-bold">{dailyLeft.toLocaleString('ru')}</div>
+   789→                  <div className="text-[10px] text-neutral-400">Осталось сегодня (из 90 000)</div>
+   790→                </div>
+   791→                <div className="border border-neutral-200 p-3">
+   792→                  <div className="text-lg font-bold">{monthlyLeft.toLocaleString('ru')}</div>
+   793→                  <div className="text-[10px] text-neutral-400">Осталось в этом месяце (из 200 000)</div>
+   794→                </div>
+   795→              </div>
+   796→            </div>
+   797→
+   798→            <div>
+   799→              <h3 className="text-xs font-semibold mb-2">Эндпоинты</h3>
+   800→              <div className="space-y-2">
+   801→                {[
+   802→                  { method: 'POST', path: '/api/auth/register', desc: 'Регистрация (login, password, password2)' },
+   803→                  { method: 'POST', path: '/api/auth/login', desc: 'Вход (login, password)' },
+   804→                  { method: 'POST', path: '/api/encrypt', desc: 'Шифрование (data, chatId, password)' },
+   805→                  { method: 'POST', path: '/api/decrypt', desc: 'Дешифровка (encrypted, chatId, chain, password)' },
+   806→                  { method: 'GET', path: '/api/channels', desc: 'Список чатов' },
+   807→                  { method: 'POST', path: '/api/channels', desc: 'Создать чат (name, password, memberIds[])' },
+   808→                  { method: 'GET', path: '/api/api-keys', desc: 'Список API-ключей' },
+   809→                  { method: 'POST', path: '/api/api-keys', desc: 'Создать API-ключ (name)' },
+   810→                  { method: 'GET', path: '/api/me', desc: 'Информация о профиле и лимитах' },
+   811→                ].map(ep => (
+   812→                  <div key={ep.path} className="border border-neutral-200 p-2 flex items-start gap-2">
+   813→                    <Badge variant="outline" className="text-[9px] font-mono shrink-0 mt-0.5">{ep.method}</Badge>
+   814→                    <div>
+   815→                      <code className="text-[10px] font-mono">{ep.path}</code>
+   816→                      <p className="text-[10px] text-neutral-400">{ep.desc}</p>
+   817→                    </div>
+   818→                  </div>
+   819→                ))}
+   820→              </div>
+   821→            </div>
+   822→
+   823→            <div>
+   824→              <h3 className="text-xs font-semibold mb-2">Использование через API-ключ</h3>
+   825→              <div className="bg-neutral-50 border border-neutral-200 p-3">
+   826→                <pre className="text-[10px] font-mono text-neutral-600 whitespace-pre-wrap">{`// Шифрование через API-ключ
+   827→fetch('/api/encrypt', {
+   828→  method: 'POST',
+   829→  headers: {
+   830→    'Content-Type': 'application/json',
+   831→    'x-api-key': 'shifru_XXXXX_YYYYY'
+   832→  },
+   833→  body: JSON.stringify({
+   834→    data: 'Привет!',
+   835→    chatId: 'chat_id_here'
+   836→  })
+   837→});
+   838→
+   839→// Дешифровка через API-ключ
+   840→fetch('/api/decrypt', {
+   841→  method: 'POST',
+   842→  headers: {
+   843→    'Content-Type': 'application/json',
+   844→    'x-api-key': 'shifru_XXXXX_YYYYY'
+   845→  },
+   846→  body: JSON.stringify({
+   847→    encrypted: 'base64url_data...',
+   848→    chatId: 'chat_id_here',
+   849→    chain: ['unicode', 'binary', 'tls', ...]
+   850→  })
+   851→});`}</pre>
+   852→              </div>
+   853→            </div>
+   854→
+   855→            <div>
+   856→              <h3 className="text-xs font-semibold mb-2">Безопасность</h3>
+   857→              <ul className="text-xs text-neutral-500 space-y-1">
+   858→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> AES-256-GCM внешний слой — квантовая устойчивость (Grover: 256 → 128 бит)</li>
+   859→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> scrypt для хеширования паролей (memory-hard, N=16384)</li>
+   860→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> PBKDF2-SHA512 для деривации ключей (600 000 итераций)</li>
+   861→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> Пароли шифруются через собственный сервис перед хешированием</li>
+   862→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> Уникальный ключ шифрования для каждого чата</li>
+   863→                <li className="flex items-start gap-1.5"><ChevronRight className="w-3 h-3 mt-0.5 shrink-0" /> Случайный порядок цепочки при каждом шифровании (5–10 этапов)</li>
+   864→              </ul>
+   865→            </div>
+   866→          </div>
+   867→        )}
+   868→      </main>
+   869→
+   870→      {/* Footer */}
+   871→      <footer className="border-t border-neutral-200 mt-auto">
+   872→        <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+   873→          <span className="text-[10px] text-neutral-300">Shifru v2</span>
+   874→          <span className="text-[10px] text-neutral-300">chain encryption</span>
+   875→        </div>
+   876→      </footer>
+   877→    </div>
+   878→  );
+   879→}
