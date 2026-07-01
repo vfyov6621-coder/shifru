@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSessionUser, getChatKeyByPassword, getUserByApiKey, getChatKeyByApiKey, checkRateLimit, incrementRateLimit } from '@/lib/auth';
+import { getSessionUser, getChatKeyByPassword, getUserByApiKey, getChatKeyByApiKey, checkRateLimit, incrementRateLimit, requireVerified } from '@/lib/auth';
 import { chainEncrypt } from '@/lib/crypto';
 import { db } from '@/lib/db';
 
@@ -21,6 +21,11 @@ export async function POST(req: NextRequest) {
       const session = await getSessionUser(req);
       if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
       if (!password) return NextResponse.json({ error: 'Пароль обязателен' }, { status: 400 });
+
+      // Check verification
+      const verified = await requireVerified(session.userId);
+      if (!verified) return NextResponse.json({ error: 'Аккаунт не верифицирован. Ожидайте подтверждения администратором.' }, { status: 403 });
+
       userId = session.userId;
       chatKey = await getChatKeyByPassword(chatId, userId, password);
     } else if (apiKeyHeader) {

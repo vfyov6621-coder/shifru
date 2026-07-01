@@ -12,6 +12,8 @@ model User {
   login         String   @unique
   passwordHash  String
   masterKeySalt String
+  isVerified    Boolean  @default(false)
+  isAdmin       Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   chats         Chat[]   @relation("ChatMembers")
@@ -26,6 +28,7 @@ model Chat {
   name             String
   encryptedKey     String
   apiEncryptedKey  String
+  isGroup          Boolean  @default(true)
   ownerId          String
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -60,8 +63,8 @@ model EncryptionLog {
 model RateLimit {
   id          String   @id @default(cuid())
   userId      String
-  period      String   // "daily" or "monthly"
-  periodKey   String   // "2026-07-01" or "2026-07"
+  period      String
+  periodKey   String
   count       Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

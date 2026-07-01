@@ -1,0 +1,555 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { useState, useCallback, useEffect } from 'react';
+     4→     4→import {
+     5→     5→  Lock, Unlock, Key, Plus, Trash2, Copy, LogOut,
+     6→     6→  Terminal, Eye, EyeOff, ChevronRight, ArrowRight,
+     7→     7→  Shield, Zap, Hash, Activity
+     8→     8→} from 'lucide-react';
+     9→     9→import { Button } from '@/components/ui/button';
+    10→    10→import { Input } from '@/components/ui/input';
+    11→    11→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+    12→    12→import { Badge } from '@/components/ui/badge';
+    13→    13→import { Separator } from '@/components/ui/separator';
+    14→    14→import { useToast } from '@/hooks/use-toast';
+    15→    15→
+    16→    16→// ============================================================
+    17→    17→// Types
+    18→    18→// ============================================================
+    19→    19→interface Session { token: string; user: { id: string; login: string } }
+    20→    20→interface Chat { id: string; name: string; createdAt: string; _count: { encryptionLogs: number } }
+    21→    21→interface ApiKeyRec { id: string; name: string; keyPrefix: string; lastUsed: string | null; createdAt: string }
+    22→    22→type View = 'auth' | 'app';
+    23→    23→type Tab = 'encrypt' | 'chats' | 'keys' | 'docs' | 'info';
+    24→    24→
+    25→    25→// ============================================================
+    26→    26→// Main
+    27→    27→// ============================================================
+    28→    28→export default function Home() {
+    29→    29→  const [view, setView] = useState<View>('auth');
+    30→    30→  const [session, setSession] = useState<Session | null>(null);
+    31→    31→  const [tab, setTab] = useState<Tab>('encrypt');
+    32→    32→  const [loading, setLoading] = useState(false);
+    33→    33→  const { toast } = useToast();
+    34→    34→
+    35→    35→  // Auth
+    36→    36→  const [login, setLogin] = useState('');
+    37→    37→  const [password, setPassword] = useState('');
+    38→    38→  const [password2, setPassword2] = useState('');
+    39→    39→  const [isRegister, setIsRegister] = useState(false);
+    40→    40→  const [authError, setAuthError] = useState('');
+    41→    41→  const [showPass, setShowPass] = useState(false);
+    42→    42→
+    43→    43→  // Encrypt/Decrypt
+    44→    44→  const [chats, setChats] = useState<Chat[]>([]);
+    45→    45→  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
+    46→    46→  const [encInput, setEncInput] = useState('');
+    47→    47→  const [encOutput, setEncOutput] = useState('');
+    48→    48→  const [encChain, setEncChain] = useState<string[]>([]);
+    49→    49→  const [decInput, setDecInput] = useState('');
+    50→    50→  const [decChain, setDecChain] = useState<string[]>([]);
+    51→    51→  const [decOutput, setDecOutput] = useState('');
+    52→    52→  const [opLoading, setOpLoading] = useState(false);
+    53→    53→
+    54→    54→  // Chats
+    55→    55→  const [newChatName, setNewChatName] = useState('');
+    56→    56→  const [showNewChat, setShowNewChat] = useState(false);
+    57→    57→
+    58→    58→  // API keys
+    59→    59→  const [apiKeys, setApiKeys] = useState<ApiKeyRec[]>([]);
+    60→    60→  const [newKeyName, setNewKeyName] = useState('');
+    61→    61→  const [createdKey, setCreatedKey] = useState('');
+    62→    62→
+    63→    63→  // Rate limits
+    64→    64→  const [dailyLeft, setDailyLeft] = useState(90000);
+    65→    65→  const [monthlyLeft, setMonthlyLeft] = useState(200000);
+    66→    66→
+    67→    67→  const headers = () => ({ Authorization: `Bearer ${session?.token}`, 'Content-Type': 'application/json' });
+    68→    68→
+    69→    69→  useEffect(() => {
+    70→    70→    const s = localStorage.getItem('qs2');
+    71→    71→    if (s) { try { const p = JSON.parse(s); setSession(p); setView('app'); } catch {} }
+    72→    72→  }, []);
+    73→    73→
+    74→    74→  const load = useCallback(async () => {
+    75→    75→    if (!session) return;
+    76→    76→    try {
+    77→    77→      const [c, k, m] = await Promise.all([
+    78→    78→        fetch('/api/channels', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+    79→    79→        fetch('/api/api-keys', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+    80→    80→        fetch('/api/me', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+    81→    81→      ]);
+    82→    82→      setChats(c.chats || []);
+    83→    83→      setApiKeys(k.keys || []);
+    84→    84→      if (m.rateLimits) { setDailyLeft(m.rateLimits.dailyRemaining); setMonthlyLeft(m.rateLimits.monthlyRemaining); }
+    85→    85→    } catch (e) { console.error(e); }
+    86→    86→  }, [session]);
+    87→    87→
+    88→    88→  useEffect(() => { if (view === 'app' && session) load(); }, [view, session, load]);
+    89→    89→
+    90→    90→  // Auth
+    91→    91→  const handleAuth = async () => {
+    92→    92→    setLoading(true); setAuthError('');
+    93→    93→    try {
+    94→    94→      const url = isRegister ? '/api/auth/register' : '/api/auth/login';
+    95→    95→      const body = isRegister ? { login, password } : { login, password };
+    96→    96→      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    97→    97→      const data = await res.json();
+    98→    98→      if (!res.ok) { setAuthError(data.error); return; }
+    99→    99→      setSession({ token: data.token, user: data.user });
+   100→   100→      localStorage.setItem('qs2', JSON.stringify({ token: data.token, user: data.user }));
+   101→   101→      setView('app');
+   102→   102→      toast({ title: isRegister ? 'Аккаунт создан' : 'Вход выполнен' });
+   103→   103→    } catch { setAuthError('Ошибка соединения'); } finally { setLoading(false); }
+   104→   104→  };
+   105→   105→
+   106→   106→  // Encrypt
+   107→   107→  const handleEncrypt = async () => {
+   108→   108→    if (!selectedChat || !encInput) return;
+   109→   109→    setOpLoading(true);
+   110→   110→    try {
+   111→   111→      const res = await fetch('/api/encrypt', { method: 'POST', headers: headers(), body: JSON.stringify({ data: encInput, chatId: selectedChat.id, password }) });
+   112→   112→      const data = await res.json();
+   113→   113→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   114→   114→      setEncOutput(data.encrypted);
+   115→   115→      setEncChain(data.chain);
+   116→   116→      setDecInput(data.encrypted);
+   117→   117→      setDecChain(data.chain);
+   118→   118→      setDecOutput('');
+   119→   119→      toast({ title: `Зашифровано · цепочка: ${data.chain.join(' → ')}` });
+   120→   120→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
+   121→   121→  };
+   122→   122→
+   123→   123→  // Decrypt
+   124→   124→  const handleDecrypt = async () => {
+   125→   125→    if (!selectedChat || !decInput) return;
+   126→   126→    setOpLoading(true);
+   127→   127→    try {
+   128→   128→      const res = await fetch('/api/decrypt', { method: 'POST', headers: headers(), body: JSON.stringify({ encrypted: decInput, chatId: selectedChat.id, chain: decChain, password }) });
+   129→   129→      const data = await res.json();
+   130→   130→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   131→   131→      setDecOutput(data.decrypted);
+   132→   132→      toast({ title: 'Расшифровано' });
+   133→   133→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
+   134→   134→  };
+   135→   135→
+   136→   136→  // Chat CRUD
+   137→   137→  const handleCreateChat = async () => {
+   138→   138→    if (!newChatName.trim()) return;
+   139→   139→    setLoading(true);
+   140→   140→    try {
+   141→   141→      const res = await fetch('/api/channels', { method: 'POST', headers: headers(), body: JSON.stringify({ name: newChatName, password }) });
+   142→   142→      const data = await res.json();
+   143→   143→      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+   144→   144→      toast({ title: `Чат "${newChatName}" создан` });
+   145→   145→      setNewChatName(''); setShowNewChat(false); load();
+   146→   146→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setLoading(false); }
+   147→   147→  };
+   148→   148→
+   149→   149→  const handleDeleteChat = async (id: string) => {
+   150→   150→    await fetch(`/api/channels?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+   151→   151→    toast({ title: 'Чат удалён' });
+   152→   152→    if (selectedChat?.id === id) setSelectedChat(null);
+   153→   153→    load();
+   154→   154→  };
+   155→   155→
+   156→   156→  // API keys
+   157→   157→  const handleCreateKey = async () => {
+   158→   158→    if (!newKeyName.trim()) return;
+   159→   159→    try {
+   160→   160→      const res = await fetch('/api/api-keys', { method: 'POST', headers: headers(), body: JSON.stringify({ name: newKeyName }) });
+   161→   161→      const data = await res.json();
+   162→   162→      if (!res.ok) { toast({ title: 'Ошибка', variant: 'destructive' }); return; }
+   163→   163→      setCreatedKey(data.apiKey); setNewKeyName('');
+   164→   164→      toast({ title: 'API-ключ создан — сохраните его!' });
+   165→   165→      load();
+   166→   166→    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); }
+   167→   167→  };
+   168→   168→
+   169→   169→  const handleDeleteKey = async (id: string) => {
+   170→   170→    await fetch(`/api/api-keys?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+   171→   171→    load();
+   172→   172→  };
+   173→   173→
+   174→   174→  const copy = (text: string) => { navigator.clipboard.writeText(text); toast({ title: 'Скопировано' }); };
+   175→   175→
+   176→   176→  const handleLogout = () => { setSession(null); localStorage.removeItem('qs2'); setView('auth'); setChats([]); setApiKeys([]); setSelectedChat(null); };
+   177→   177→
+   178→   178→  // ============================================================
+   179→   179→  // AUTH VIEW
+   180→   180→  // ============================================================
+   181→   181→  if (view === 'auth') {
+   182→   182→    return (
+   183→   183→      <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+   184→   184→        <div className="w-full max-w-sm">
+   185→   185→          <div className="mb-8 text-center">
+   186→   186→            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full border-2 border-black mb-4">
+   187→   187→              <Shield className="w-5 h-5" />
+   188→   188→            </div>
+   189→   189→            <h1 className="text-xl font-bold tracking-tight">QuantumShield</h1>
+   190→   190→            <p className="text-xs text-neutral-500 mt-1">Цепочечное шифрование v2</p>
+   191→   191→          </div>
+   192→   192→
+   193→   193→          <Card className="border-black">
+   194→   194→            <CardHeader className="pb-3">
+   195→   195→              <CardTitle className="text-sm font-semibold">{isRegister ? 'Регистрация' : 'Вход'}</CardTitle>
+   196→   196→            </CardHeader>
+   197→   197→            <CardContent className="space-y-3">
+   198→   198→              {authError && <p className="text-xs text-red-600">{authError}</p>}
+   199→   199→
+   200→   200→              {isRegister && (
+   201→   201→                <div>
+   202→   202→                  <label className="text-xs font-medium mb-1 block">Логин</label>
+   203→   203→                  <Input placeholder="username" value={login} onChange={e => setLogin(e.target.value)} className="border-black" />
+   204→   204→                </div>
+   205→   205→              )}
+   206→   206→
+   207→   207→              <div>
+   208→   208→                <label className="text-xs font-medium mb-1 block">{isRegister ? 'Пароль' : 'Логин'}</label>
+   209→   209→                <div className="relative">
+   210→   210→                  <Input
+   211→   211→                    type={isRegister ? (showPass ? 'text' : 'password') : 'text'}
+   212→   212→                    placeholder={isRegister ? '••••••' : 'username'}
+   213→   213→                    value={isRegister ? password : login}
+   214→   214→                    onChange={e => isRegister ? setPassword(e.target.value) : setLogin(e.target.value)}
+   215→   215→                    className={isRegister ? 'pr-9 border-black' : 'border-black'}
+   216→   216→                  />
+   217→   217→                  {isRegister && (
+   218→   218→                    <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400">
+   219→   219→                      {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+   220→   220→                    </button>
+   221→   221→                  )}
+   222→   222→                </div>
+   223→   223→              </div>
+   224→   224→
+   225→   225→              {isRegister && (
+   226→   226→                <div>
+   227→   227→                  <label className="text-xs font-medium mb-1 block">Повторите пароль</label>
+   228→   228→                  <Input type="password" placeholder="••••••" value={password2} onChange={e => setPassword2(e.target.value)} className="border-black" />
+   229→   229→                </div>
+   230→   230→              )}
+   231→   231→
+   232→   232→              <Button onClick={() => {
+   233→   233→                if (isRegister && password !== password2) { setAuthError('Пароли не совпадают'); return; }
+   234→   234→                handleAuth();
+   235→   235→              }} className="w-full bg-black text-white hover:bg-neutral-800" disabled={loading || (isRegister && (!login || !password || !password2)) || (!isRegister && (!login || !password))}>
+   236→   236→                {loading ? '...' : (isRegister ? 'Создать аккаунт' : 'Войти')}
+   237→   237→              </Button>
+   238→   238→
+   239→   239→              <p className="text-center text-xs text-neutral-400">
+   240→   240→                {isRegister ? 'Есть аккаунт?' : 'Нет аккаунта?'}
+   241→   241→                {' '}
+   242→   242→                <button onClick={() => { setIsRegister(!isRegister); setAuthError(''); }} className="underline text-black">
+   243→   243→                  {isRegister ? 'Войти' : 'Зарегистрироваться'}
+   244→   244→                </button>
+   245→   245→              </p>
+   246→   246→            </CardContent>
+   247→   247→          </Card>
+   248→   248→
+   249→   249→          <div className="flex items-center justify-center gap-3 mt-6 text-[10px] text-neutral-400">
+   250→   250→            <span>AES-256</span>
+   251→   251→            <span>·</span>
+   252→   252→            <span>Argon2id</span>
+   253→   253→            <span>·</span>
+   254→   254→            <span>Chain</span>
+   255→   255→          </div>
+   256→   256→        </div>
+   257→   257→      </div>
+   258→   258→    );
+   259→   259→  }
+   260→   260→
+   261→   261→  // ============================================================
+   262→   262→  // APP VIEW
+   263→   263→  // ============================================================
+   264→   264→  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+   265→   265→    { key: 'encrypt', label: 'Шифрование', icon: <Lock className="w-3.5 h-3.5" /> },
+   266→   266→    { key: 'chats', label: 'Чаты', icon: <Hash className="w-3.5 h-3.5" /> },
+   267→   267→    { key: 'keys', label: 'API', icon: <Key className="w-3.5 h-3.5" /> },
+   268→   268→    { key: 'docs', label: 'Документация', icon: <Terminal className="w-3.5 h-3.5" /> },
+   269→   269→    { key: 'info', label: 'Инфо', icon: <Activity className="w-3.5 h-3.5" /> },
+   270→   270→  ];
+   271→   271→
+   272→   272→  return (
+   273→   273→    <div className="min-h-screen flex flex-col bg-white">
+   274→   274→      {/* Header */}
+   275→   275→      <header className="border-b border-black sticky top-0 bg-white z-50">
+   276→   276→        <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
+   277→   277→          <div className="flex items-center gap-2">
+   278→   278→            <Shield className="w-4 h-4" />
+   279→   279→            <span className="text-sm font-bold tracking-tight">QS</span>
+   280→   280→            <span className="text-xs text-neutral-400 font-mono">{session?.user.login}</span>
+   281→   281→          </div>
+   282→   282→          <div className="flex items-center gap-3 text-[10px] font-mono text-neutral-400">
+   283→   283→            <span>день: {dailyLeft.toLocaleString()}</span>
+   284→   284→            <span className="text-neutral-300">|</span>
+   285→   285→            <span>мес: {monthlyLeft.toLocaleString()}</span>
+   286→   286→            <button onClick={handleLogout} className="ml-2 p-1 hover:bg-neutral-100 rounded"><LogOut className="w-3.5 h-3.5" /></button>
+   287→   287→          </div>
+   288→   288→        </div>
+   289→   289→      </header>
+   290→   290→
+   291→   291→      {/* Tabs */}
+   292→   292→      <div className="border-b border-black">
+   293→   293→        <div className="max-w-5xl mx-auto px-4 flex gap-0">
+   294→   294→          {tabs.map(t => (
+   295→   295→            <button
+   296→   296→              key={t.key}
+   297→   297→              onClick={() => setTab(t.key)}
+   298→   298→              className={`px-3 py-2.5 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+   299→   299→                tab === t.key ? 'border-black text-black' : 'border-transparent text-neutral-400 hover:text-black'
+   300→   300→              }`}
+   301→   301→            >
+   302→   302→              {t.icon} {t.label}
+   303→   303→            </button>
+   304→   304→          ))}
+   305→   305→        </div>
+   306→   306→      </div>
+   307→   307→
+   308→   308→      {/* Content */}
+   309→   309→      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+   310→   310→        {/* ===== ENCRYPT TAB ===== */}
+   311→   311→        {tab === 'encrypt' && (
+   312→   312→          <div className="space-y-4">
+   313→   313→            {/* Chat selector */}
+   314→   314→            <div>
+   315→   315→              <p className="text-xs font-medium mb-2">ЧАТ</p>
+   316→   316→              {chats.length === 0 ? (
+   317→   317→                <p className="text-xs text-neutral-400 py-6 border border-dashed border-neutral-300 text-center">Нет чатов. Создайте на вкладке &quot;Чаты&quot;.</p>
+   318→   318→              ) : (
+   319→   319→                <div className="flex flex-wrap gap-1.5">
+   320→   320→                  {chats.map(ch => (
+   321→   321→                    <button key={ch.id} onClick={() => setSelectedChat(ch)}
+   322→   322→                      className={`px-2.5 py-1.5 text-xs border transition-colors ${selectedChat?.id === ch.id ? 'border-black bg-black text-white' : 'border-neutral-300 hover:border-black'}`}>
+   323→   323→                      {ch.name}
+   324→   324→                      <span className="text-neutral-400 ml-1">{ch._count.encryptionLogs}</span>
+   325→   325→                    </button>
+   326→   326→                  ))}
+   327→   327→                </div>
+   328→   328→              )}
+   329→   329→            </div>
+   330→   330→
+   331→   331→            {selectedChat && (
+   332→   332→              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   333→   333→                {/* Encrypt */}
+   334→   334→                <div>
+   335→   335→                  <p className="text-xs font-medium mb-1.5">ШИФРОВАТЬ <span className="text-neutral-400">→ {selectedChat.name}</span></p>
+   336→   336→                  <textarea
+   337→   337→                    className="w-full min-h-[100px] p-2.5 border border-neutral-300 text-xs font-mono resize-y focus:outline-none focus:border-black bg-white"
+   338→   338→                    placeholder="Данные..."
+   339→   339→                    value={encInput}
+   340→   340→                    onChange={e => setEncInput(e.target.value)}
+   341→   341→                  />
+   342→   342→                  <Button onClick={handleEncrypt} disabled={opLoading || !encInput} size="sm" className="w-full mt-2 bg-black text-white hover:bg-neutral-800">
+   343→   343→                    {opLoading ? '...' : <><Lock className="w-3 h-3 mr-1" /> Шифровать</>}
+   344→   344→                  </Button>
+   345→   345→                  {encOutput && (
+   346→   346→                    <div className="mt-2">
+   347→   347→                      <div className="flex items-center justify-between mb-1">
+   348→   348→                        <span className="text-[10px] text-neutral-400">ЦЕПОЧКА: {encChain.join(' → ')}</span>
+   349→   349→                        <button onClick={() => copy(encOutput)} className="text-[10px] text-neutral-400 hover:text-black"><Copy className="w-3 h-3" /></button>
+   350→   350→                      </div>
+   351→   351→                      <div className="p-2 border border-neutral-200 text-[10px] font-mono break-all max-h-24 overflow-y-auto bg-neutral-50">{encOutput}</div>
+   352→   352→                    </div>
+   353→   353→                  )}
+   354→   354→                </div>
+   355→   355→
+   356→   356→                {/* Decrypt */}
+   357→   357→                <div>
+   358→   358→                  <p className="text-xs font-medium mb-1.5">ДЕШИФРОВАТЬ <span className="text-neutral-400">→ {selectedChat.name}</span></p>
+   359→   359→                  <textarea
+   360→   360→                    className="w-full min-h-[100px] p-2.5 border border-neutral-300 text-xs font-mono resize-y focus:outline-none focus:border-black bg-white"
+   361→   361→                    placeholder="Шифртекст..."
+   362→   362→                    value={decInput}
+   363→   363→                    onChange={e => { setDecInput(e.target.value); setDecChain([]); }}
+   364→   364→                  />
+   365→   365→                  <textarea
+   366→   366→                    className="w-full min-h-[30px] p-2 border border-neutral-300 text-[10px] font-mono resize-y focus:outline-none focus:border-black bg-white mt-1"
+   367→   367→                    placeholder='Цепочка: ["ssl","tls","binary"]'
+   368→   368→                    value={decChain.length > 0 ? JSON.stringify(decChain) : ''}
+   369→   369→                    onChange={e => { try { setDecChain(JSON.parse(e.target.value)); } catch {} }}
+   370→   370→                  />
+   371→   371→                  <Button onClick={handleDecrypt} disabled={opLoading || !decInput || decChain.length === 0} variant="outline" size="sm" className="w-full mt-1">
+   372→   372→                    {opLoading ? '...' : <><Unlock className="w-3 h-3 mr-1" /> Дешифровать</>}
+   373→   373→                  </Button>
+   374→   374→                  {decOutput && (
+   375→   375→                    <div className="mt-2">
+   376→   376→                      <div className="flex items-center justify-between mb-1">
+   377→   377→                        <span className="text-[10px] text-neutral-400">РЕЗУЛЬТАТ</span>
+   378→   378→                        <button onClick={() => copy(decOutput)} className="text-[10px] text-neutral-400 hover:text-black"><Copy className="w-3 h-3" /></button>
+   379→   379→                      </div>
+   380→   380→                      <div className="p-2.5 border border-black text-xs bg-white">{decOutput}</div>
+   381→   381→                    </div>
+   382→   382→                  )}
+   383→   383→                </div>
+   384→   384→              </div>
+   385→   385→            )}
+   386→   386→
+   387→   387→            {/* Chain diagram */}
+   388→   388→            <div className="border border-neutral-200 p-3 mt-4">
+   389→   389→              <p className="text-[10px] font-medium mb-2">КАЖДОЕ ШИФРОВАНИЕ — УНИКАЛЬНАЯ ЦЕПОЧКА</p>
+   390→   390→              <div className="flex flex-wrap items-center gap-1 text-[10px]">
+   391→   391→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">данные</span>
+   392→   392→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   393→   393→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">unicode</span>
+   394→   394→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   395→   395→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">binary</span>
+   396→   396→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   397→   397→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">decimal</span>
+   398→   398→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   399→   399→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">TLS</span>
+   400→   400→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   401→   401→                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">SSL</span>
+   402→   402→                <ChevronRight className="w-3 h-3 text-neutral-300" />
+   403→   403→                <span className="px-2 py-0.5 bg-black text-white">AES-256-GCM</span>
+   404→   404→              </div>
+   405→   405→              <p className="text-[10px] text-neutral-400 mt-2">Порядок методов рандомный. Методы могут повторяться. Дешифратор знает порядок.</p>
+   406→   406→            </div>
+   407→   407→          </div>
+   408→   408→        )}
+   409→   409→
+   410→   410→        {/* ===== CHATS TAB ===== */}
+   411→   411→        {tab === 'chats' && (
+   412→   412→          <div className="space-y-4">
+   413→   413→            <div className="flex items-center justify-between">
+   414→   414→              <p className="text-xs font-medium">ЧАТЫ</p>
+   415→   415→              <Button onClick={() => setShowNewChat(!showNewChat)} variant="outline" size="sm" className="border-black">
+   416→   416→                <Plus className="w-3 h-3 mr-1" /> Новый
+   417→   417→              </Button>
+   418→   418→            </div>
+   419→   419→
+   420→   420→            {showNewChat && (
+   421→   421→              <div className="border border-black p-3 flex gap-2">
+   422→   422→                <Input placeholder="Чат с Ваней" value={newChatName} onChange={e => setNewChatName(e.target.value)} className="border-black text-xs" />
+   423→   423→                <Button onClick={handleCreateChat} disabled={!newChatName.trim()} size="sm" className="bg-black text-white">OK</Button>
+   424→   424→                <Button onClick={() => setShowNewChat(false)} variant="ghost" size="sm">Отмена</Button>
+   425→   425→              </div>
+   426→   426→            )}
+   427→   427→
+   428→   428→            {chats.length === 0 ? (
+   429→   429→              <p className="text-xs text-neutral-400 py-8 text-center border border-dashed border-neutral-300">Нет чатов</p>
+   430→   430→            ) : (
+   431→   431→              <div className="space-y-1">
+   432→   432→                {chats.map(ch => (
+   433→   433→                  <div key={ch.id} className="flex items-center justify-between p-2.5 border border-neutral-200 hover:border-black transition-colors group">
+   434→   434→                    <div>
+   435→   435→                      <span className="text-xs font-medium">{ch.name}</span>
+   436→   436→                      <span className="text-[10px] text-neutral-400 ml-2">{ch._count.encryptionLogs} оп.</span>
+   437→   437→                    </div>
+   438→   438→                    <button onClick={() => handleDeleteChat(ch.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-neutral-100">
+   439→   439→                      <Trash2 className="w-3 h-3 text-neutral-400" />
+   440→   440→                    </button>
+   441→   441→                  </div>
+   442→   442→                ))}
+   443→   443→              </div>
+   444→   444→            )}
+   445→   445→          </div>
+   446→   446→        )}
+   447→   447→
+   448→   448→        {/* ===== API KEYS TAB ===== */}
+   449→   449→        {tab === 'keys' && (
+   450→   450→          <div className="space-y-4">
+   451→   451→            <p className="text-xs font-medium">API-КЛЮЧИ</p>
+   452→   452→
+   453→   453→            {createdKey && (
+   454→   454→              <div className="border-2 border-black p-3">
+   455→   455→                <p className="text-[10px] font-medium mb-1">СОХРАНИТЕ КЛЮЧ — БОЛЬШЕ НЕ ПОКАЖЕТСЯ</p>
+   456→   456→                <div className="p-2 bg-neutral-50 font-mono text-[10px] break-all">{createdKey}</div>
+   457→   457→                <Button size="sm" variant="outline" onClick={() => { copy(createdKey); setCreatedKey(''); }} className="mt-2 border-black text-xs">
+   458→   458→                  <Copy className="w-3 h-3 mr-1" /> Копировать и закрыть
+   459→   459→                </Button>
+   460→   460→              </div>
+   461→   461→            )}
+   462→   462→
+   463→   463→            <div className="flex gap-2">
+   464→   464→              <Input placeholder="Название ключа" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} className="border-black text-xs max-w-xs" />
+   465→   465→              <Button onClick={handleCreateKey} disabled={!newKeyName.trim()} size="sm" className="bg-black text-white">
+   466→   466→                <Plus className="w-3 h-3 mr-1" /> Создать
+   467→   467→              </Button>
+   468→   468→            </div>
+   469→   469→
+   470→   470→            {apiKeys.length === 0 ? (
+   471→   471→              <p className="text-xs text-neutral-400 py-6 text-center border border-dashed border-neutral-300">Нет ключей</p>
+   472→   472→            ) : (
+   473→   473→              <div className="space-y-1">
+   474→   474→                {apiKeys.map(k => (
+   475→   475→                  <div key={k.id} className="flex items-center justify-between p-2.5 border border-neutral-200 group">
+   476→   476→                    <div className="flex items-center gap-2">
+   477→   477→                      <Key className="w-3 h-3" />
+   478→   478→                      <div>
+   479→   479→                        <span className="text-xs">{k.name}</span>
+   480→   480→                        <span className="text-[10px] text-neutral-400 font-mono ml-2">{k.keyPrefix}</span>
+   481→   481→                      </div>
+   482→   482→                    </div>
+   483→   483→                    <button onClick={() => handleDeleteKey(k.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-neutral-100">
+   484→   484→                      <Trash2 className="w-3 h-3 text-neutral-400" />
+   485→   485→                    </button>
+   486→   486→                  </div>
+   487→   487→                ))}
+   488→   488→              </div>
+   489→   489→            )}
+   490→   490→          </div>
+   491→   491→        )}
+   492→   492→
+   493→   493→        {/* ===== DOCS TAB ===== */}
+   494→   494→        {tab === 'docs' && (
+   495→   495→          <div className="space-y-4 max-w-2xl">
+   496→   496→            <p className="text-xs font-medium">API ДОКУМЕНТАЦИЯ</p>
+   497→   497→
+   498→   498→            {[
+   499→   499→              { method: 'POST', path: '/api/encrypt', desc: 'Зашифровать', body: '{\n  "data": "Секретное сообщение",\n  "chatId": "clxxxxx..."\n}', response: '{\n  "encrypted": "base64url...",\n  "chain": ["ssl","tls","binary"],\n  "version": 2\n}' },
+   500→   500→              { method: 'POST', path: '/api/decrypt', desc: 'Дешифровать', body: '{\n  "encrypted": "base64url...",\n  "chatId": "clxxxxx...",\n  "chain": ["ssl","tls","binary"]\n}', response: '{\n  "decrypted": "Секретное сообщение"\n}' },
+   501→   501→              { method: 'GET', path: '/api/channels', desc: 'Список чатов', body: null, response: '{\n  "chats": [{ "id": "...", "name": "..." }]\n}' },
+   502→   502→            ].map(api => (
+   503→   503→              <div key={api.path} className="border border-neutral-200 p-3">
+   504→   504→                <div className="flex items-center gap-2 mb-2">
+   505→   505→                  <Badge variant="outline" className="text-[10px] font-mono border-black">{api.method}</Badge>
+   506→   506→                  <span className="text-xs font-mono font-medium">{api.path}</span>
+   507→   507→                  <span className="text-[10px] text-neutral-400">{api.desc}</span>
+   508→   508→                </div>
+   509→   509→                <p className="text-[10px] text-neutral-400 mb-1">Header: X-API-Key: qs_XXXXXXXX_...</p>
+   510→   510→                {api.body && (
+   511→   511→                  <>
+   512→   512→                    <p className="text-[10px] font-medium mt-2">Body:</p>
+   513→   513→                    <pre className="text-[10px] font-mono p-2 bg-neutral-50 border border-neutral-200 mt-1">{api.body}</pre>
+   514→   514→                  </>
+   515→   515→                )}
+   516→   516→                <p className="text-[10px] font-medium mt-2">Response:</p>
+   517→   517→                <pre className="text-[10px] font-mono p-2 bg-neutral-50 border border-neutral-200 mt-1">{api.response}</pre>
+   518→   518→              </div>
+   519→   519→            ))}
+   520→   520→          </div>
+   521→   521→        )}
+   522→   522→
+   523→   523→        {/* ===== INFO TAB ===== */}
+   524→   524→        {tab === 'info' && (
+   525→   525→          <div className="space-y-3 max-w-xl">
+   526→   526→            <p className="text-xs font-medium">О ШИФРОВАНИИ</p>
+   527→   527→
+   528→   528→            {[
+   529→   529→              { label: 'Метод', value: 'Цепочечное: unicode → binary → decimal → TLS → SSL (рандомный порядок)' },
+   530→   530→              { label: 'Внешний слой', value: 'AES-256-GCM (квантовая устойчивость)' },
+   531→   531→              { label: 'Деривация ключей', value: 'PBKDF2-SHA512 (600k пароль, 100k AES, 50k на метод цепочки)' },
+   532→   532→              { label: 'Хеширование паролей', value: 'Argon2id (64MB, memory-hard) — пароль шифруется через сервис' },
+   533→   533→              { label: 'Длина цепочки', value: '5-10 методов (рандомная)' },
+   534→   534→              { label: 'Лимиты', value: '90 000 / день, 200 000 / месяц' },
+   535→   535→              { label: 'Квантовая устойчивость', value: 'AES-256 при Гровере = 128 бит + Argon2id memory-hard + структурная сложность цепочки' },
+   536→   536→            ].map(item => (
+   537→   537→              <div key={item.label} className="border-b border-neutral-100 pb-2">
+   538→   538→                <span className="text-[10px] text-neutral-400">{item.label}</span>
+   539→   539→                <p className="text-xs">{item.value}</p>
+   540→   540→              </div>
+   541→   541→            ))}
+   542→   542→          </div>
+   543→   543→        )}
+   544→   544→      </main>
+   545→   545→
+   546→   546→      {/* Footer */}
+   547→   547→      <footer className="mt-auto border-t border-neutral-200 py-3">
+   548→   548→        <div className="max-w-5xl mx-auto px-4 flex items-center justify-between text-[10px] text-neutral-400">
+   549→   549→          <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> QuantumShield v2</span>
+   550→   550→          <span>AES-256 · Argon2id · Chain</span>
+   551→   551→        </div>
+   552→   552→      </footer>
+   553→   553→    </div>
+   554→   554→  );
+   555→   555→}

@@ -1,20 +1,22 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
+const inter = Inter({ variable: "--font-sans", subsets: ["latin", "cyrillic"] });
+const jetbrains = JetBrains_Mono({ variable: "--font-mono", subsets: ["latin", "cyrillic"] });
+
+
 
 export const metadata: Metadata = {
-  title: "QuantumShield — Шифрование",
-  description: "Цепочечное шифрование данных с уникальными ключами на каждый чат. Открытый API.",
+  title: "Shifru — Цепочечное шифрование",
+  description: "Цепочечное шифрование данных с уникальными ключами на каждый чат. Квантово-устойчивое. Открытый API.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ru" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body className={`${inter.variable} ${jetbrains.variable} antialiased`}>
         {children}
         <Toaster />
       </body>

@@ -8,10 +8,10 @@ export async function GET(req: NextRequest) {
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const chats = await db.chat.findMany({
-      where: { ownerId: session.userId },
+      where: { members: { some: { id: session.userId } } },
       select: {
-        id: true, name: true, createdAt: true,
-        _count: { select: { encryptionLogs: true } },
+        id: true, name: true, isGroup: true, createdAt: true,
+        _count: { select: { encryptionLogs: true, members: true } },
         members: { select: { id: true, login: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -29,14 +29,14 @@ export async function POST(req: NextRequest) {
     const session = await getSessionUser(req);
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { name, password } = await req.json();
+    const { name, password, memberIds } = await req.json();
     if (!name || !password) {
       return NextResponse.json({ error: 'Название и пароль обязательны' }, { status: 400 });
     }
 
-    const chat = await createChatForUser(session.userId, name, password);
+    const chat = await createChatForUser(session.userId, name, password, memberIds || []);
     return NextResponse.json({
-      chat: { id: chat.id, name: chat.name, createdAt: chat.createdAt },
+      chat: { id: chat.id, name: chat.name, isGroup: chat.isGroup, createdAt: chat.createdAt },
     }, { status: 201 });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : 'Ошибка сервера';

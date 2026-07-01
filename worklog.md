@@ -1,23 +1,30 @@
 ---
 Task ID: 1
-Agent: Main Agent
-Task: Полная переработка QuantumShield v2 — цепочечное шифрование
+Agent: main
+Task: Полная переработка Shifru — цепочечное шифрование, чёрно-белый UI, Firebase
 
 Work Log:
-- Переработал Prisma схему: User(login), Chat(ownerId+members), RateLimit, убрал VerificationToken
-- Переписал crypto.ts: цепочечные преобразования (unicode→binary→decimal→TLS→SSL) + AES-256-GCM внешний слой
-- Исправил toBinary/fromBinary для UTF-8 через Buffer (многобайтовые символы)
-- Исправил encryptPasswordThroughService на детерминированную (IV от хеша пароля)
-- Обновил auth.ts: логин без email, пароль шифруется через сервис→Argon2id, rate limiting
-- Обновил все API маршруты: register(3 поля), login, channels, encrypt, decrypt, api-keys, me
-- Добавил rate limiting: 90 000/день, 200 000/месяц через RateLimit таблицу
-- Перестроил UI: чёрно-белый минимализм, 5 вкладок, 3 поля регистрации
-- Интеграционный тест (test_full.ts): ВСЕ ТЕСТЫ ПРОЙДЕНЫ
+- Проверил текущее состояние проекта (унаследовано от предыдущей сессии)
+- Обновил branding: QuantumShield → Shifru во всех файлах
+- Обновил шрифты: Geist → Inter + JetBrains Mono (с поддержкой кириллицы)
+- Добавил Firebase конфиг (projectId: shifru-75ec7) в .env и src/lib/firebase.ts
+- Установил firebase SDK
+- Заменил argon2 (native модуль, крашил сервер) на scrypt (встроенный в Node.js, memory-hard, квантово-устойчивый)
+- Снизил Prisma query logging только для dev-режима
+- Обновил UI: убрал упоминания Argon2id, заменил на scrypt
+- Обновил API-ключи: префикс qs_ → shifru_
+- Обновил JWT секрет и server key
+- Production build: ✅ успешно
+- Полный тест 15 шагов: ✅ все прошли
 
 Stage Summary:
-- Цепочечное шифрование: рандомный порядок 5-10 методов, каждый раз разный
-- TLS: HMAC-SHA256 stream cipher + XOR, SSL: bit rotation + substitution + XOR
-- Два шифрования одного текста → разные цепочки и разные шифртексты ✓
-- Дешифровка обоих → исходный текст ✓
-- Rate limit: 90000 → 89999 после одного запроса ✓
-- Пароль шифруется через сервис перед Argon2id хешированием ✓
+- Все API эндпоинты работают корректно
+- Цепочечное шифрование (unicode→binary→decimal→TLS→SSL) с переменным порядком ✅
+- Регистрация 3 поля (логин, пароль, подтверждение) ✅
+- Ручная верификация админом ✅
+- Групповые и личные чаты ✅
+- API-ключи для внешнего доступа ✅
+- Rate limiting (90к/день, 200к/мес) ✅
+- Самошифрование паролей через сервис ✅
+- Квантовая устойчивость (AES-256-GCM + scrypt + PBKDF2-SHA512) ✅
+- Чёрно-белый минималистичный UI с вкладками ✅

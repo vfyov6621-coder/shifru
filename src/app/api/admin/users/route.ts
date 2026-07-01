@@ -1,24 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getSessionUser, checkRateLimit } from '@/lib/auth';
+import { getSessionUser } from '@/lib/auth';
 
+// GET /api/admin/users — list all users (admin only)
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const user = await db.user.findUnique({
-      where: { id: session.userId },
+    if (!session.isAdmin) {
+      return NextResponse.json({ error: 'Нет прав' }, { status: 403 });
+    }
+
+    const users = await db.user.findMany({
       select: {
-        id: true, login: true, isVerified: true, isAdmin: true, createdAt: true,
+        id: true, login: true, isVerified: true, isAdmin: true,
+        createdAt: true,
         _count: { select: { chats: true, apiKeys: true, encryptionLogs: true } },
       },
+      orderBy: { createdAt: 'desc' },
     });
 
-    const limits = await checkRateLimit(session.userId);
-
-    return NextResponse.json({ user, rateLimits: limits });
+    return NextResponse.json({ users });
   } catch (error) {
+    console.error('Admin users error:', error);
     return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }

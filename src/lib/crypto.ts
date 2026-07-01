@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, createHash, pbkdf2Sync, createHmac } from 'crypto';
 
 // ============================================================
-// QuantumShield Chain Encryption Engine v2
+// Shifru Chain Encryption Engine v2
 // ============================================================
 // Chain: message → unicode → binary → unicode → decimal → TLS → unicode → binary → SSL
 // Order is random each time. Decryption reverses the chain.
@@ -25,7 +25,7 @@ const MAX_CHAIN_LENGTH = 10;
 // ============================================================
 function getSystemKey(): Buffer {
   const hash = createHash('sha512')
-    .update('qs-system-password-encryption-key-v2')
+    .update('shifru-system-password-encryption-key-v2')
     .digest('hex');
   return Buffer.from(hash, 'hex').subarray(0, KEY_LENGTH);
 }
@@ -305,7 +305,7 @@ export function decryptChatKey(encrypted: string, masterKey: Buffer): Buffer {
 export function generateApiKey(): string {
   const prefix = randomBytes(4).toString('hex').toUpperCase();
   const secret = randomBytes(32).toString('base64url');
-  return `qs_${prefix}_${secret}`;
+  return `shifru_${prefix}_${secret}`;
 }
 
 export function hashApiKey(apiKey: string): string {
@@ -315,8 +315,8 @@ export function hashApiKey(apiKey: string): string {
 export const CRYPTO_INFO = {
   algorithm: 'Chain encryption (unicode→binary→decimal→TLS→SSL) + AES-256-GCM outer layer',
   keyDerivation: 'PBKDF2-SHA512 (600k password, 100k outer AES, 50k per chain method)',
-  passwordHashing: 'Argon2id (memory-hard, quantum-resistant)',
-  quantumResistance: 'AES-256-GCM outer: 128-bit vs Grover. Chain adds structural complexity. Argon2id is memory-hard.',
+  passwordHashing: 'scrypt (memory-hard, N=16384, built-in Node.js crypto, quantum-resistant)',
+  quantumResistance: 'AES-256-GCM outer: 128-bit vs Grover. Chain adds structural complexity. scrypt is memory-hard.',
   chainMethods: ['unicode', 'binary', 'decimal', 'tls', 'ssl'],
   chainLength: `${MIN_CHAIN_LENGTH}-${MAX_CHAIN_LENGTH} (random each time)`,
 };
