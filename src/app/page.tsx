@@ -297,28 +297,24 @@ export default function Home() {
             <CardContent className="space-y-3">
               {authError && <p className="text-xs text-red-600">{authError}</p>}
 
-              {isRegister && (
-                <div>
-                  <label className="text-xs font-medium mb-1 block">Логин</label>
-                  <Input placeholder="username" value={login} onChange={e => setLogin(e.target.value)} className="border-black" />
-                </div>
-              )}
+              <div>
+                <label className="text-xs font-medium mb-1 block">Логин</label>
+                <Input placeholder="username" value={login} onChange={e => setLogin(e.target.value)} className="border-black" />
+              </div>
 
               <div>
-                <label className="text-xs font-medium mb-1 block">{isRegister ? 'Пароль' : 'Логин'}</label>
+                <label className="text-xs font-medium mb-1 block">Пароль</label>
                 <div className="relative">
                   <Input
-                    type={isRegister ? (showPass ? 'text' : 'password') : 'text'}
-                    placeholder={isRegister ? 'Минимум 6 символов' : 'username'}
-                    value={isRegister ? password : login}
-                    onChange={e => isRegister ? setPassword(e.target.value) : setLogin(e.target.value)}
-                    className={isRegister ? 'pr-9 border-black' : 'border-black'}
+                    type={showPass ? 'text' : 'password'}
+                    placeholder={isRegister ? 'Минимум 6 символов' : 'Пароль'}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    className="pr-9 border-black"
                   />
-                  {isRegister && (
-                    <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-black">
-                      {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
+                  <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-black">
+                    {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
                 </div>
               </div>
 
