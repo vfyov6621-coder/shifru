@@ -2,42 +2,50 @@ import argon2 from 'argon2';
 import { SignJWT, jwtVerify } from 'jose';
 import { createHash } from 'crypto';
 import { db } from './db';
-import { generateMasterKey, deriveChannelKey, encryptChannelKey, decryptChannelKey, generateVerificationToken } from './crypto';
+import {
+  generateMasterKey, deriveKeyFromPassword, encryptChatKey,
+  decryptChatKey, encryptPasswordThroughService, generateApiKey as genApiKey,
+  hashApiKey, chainEncrypt, chainDecrypt, generateRandomChain
+} from './crypto';
 
 const JWT_SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'quantum-shield-dev-secret-change-in-production'
+  process.env.JWT_SECRET || 'quantum-shield-v2-secret'
 );
 
 // ============================================================
-// Password Hashing — Argon2id (quantum-resistant, memory-hard)
+// Password — encrypted through own service, then Argon2id
 // ============================================================
 
 export async function hashPassword(password: string): Promise<string> {
-  return argon2.hash(password, {
+  // Step 1: Encrypt password through our chain service
+  const serviceEncrypted = encryptPasswordThroughService(password);
+  // Step 2: Hash the service-encrypted password with Argon2id
+  return argon2.hash(serviceEncrypted, {
     type: argon2.argon2id,
-    memoryCost: 65536,   // 64 MB
-    timeCost: 3,          // 3 iterations
-    parallelism: 4,       // 4 threads
-    hashLength: 32,       // 256-bit output
-    saltLength: 16,       // 128-bit salt
+    memoryCost: 65536,
+    timeCost: 3,
+    parallelism: 4,
+    hashLength: 32,
+    saltLength: 16,
   });
 }
 
 export async function verifyPassword(hashedPassword: string, plainPassword: string): Promise<boolean> {
   try {
-    return await argon2.verify(hashedPassword, plainPassword);
+    const serviceEncrypted = encryptPasswordThroughService(plainPassword);
+    return await argon2.verify(hashedPassword, serviceEncrypted);
   } catch {
     return false;
   }
 }
 
 // ============================================================
-// JWT — stateless session tokens
+// JWT
 // ============================================================
 
 export interface JwtPayload {
   userId: string;
-  email: string;
+  login: string;
 }
 
 export async function createToken(payload: JwtPayload): Promise<string> {
@@ -57,165 +65,127 @@ export async function verifyToken(token: string): Promise<JwtPayload | null> {
   }
 }
 
-// ============================================================
-// Session helpers — extract user from request
-// ============================================================
-
 export async function getSessionUser(req: Request): Promise<JwtPayload | null> {
   const authHeader = req.headers.get('authorization');
   if (!authHeader?.startsWith('Bearer ')) return null;
-  const token = authHeader.slice(7);
-  return verifyToken(token);
+  return verifyToken(authHeader.slice(7));
 }
 
 // ============================================================
-// API Key authentication
+// API Key auth
 // ============================================================
 
 export async function getUserByApiKey(apiKey: string) {
-  // API key format: qs_XXXXXXXX_...
-  const { hashApiKey } = await import('./crypto');
   const keyHash = hashApiKey(apiKey);
-
-  const apiKeyRecord = await db.apiKey.findUnique({
+  const record = await db.apiKey.findUnique({
     where: { keyHash },
     include: { user: true },
   });
-
-  if (!apiKeyRecord) return null;
-
-  // Update last used
-  await db.apiKey.update({
-    where: { id: apiKeyRecord.id },
-    data: { lastUsed: new Date() },
-  });
-
-  return apiKeyRecord.user;
+  if (!record) return null;
+  await db.apiKey.update({ where: { id: record.id }, data: { lastUsed: new Date() } });
+  return record.user;
 }
 
 // ============================================================
-// Channel key management
+// Server key (for API-encrypted chat keys)
 // ============================================================
-
-export async function createUserMasterKey(password: string, salt: string): Promise<Buffer> {
-  const { deriveKeyFromPassword } = await import('./crypto');
-  return deriveKeyFromPassword(password, salt);
-}
 
 export function getServerKey(): Buffer {
-  const hash = createHash('sha512').update(process.env.JWT_SECRET || 'quantum-shield-dev-secret-change-in-production').digest('hex');
+  const hash = createHash('sha512').update(process.env.JWT_SECRET || 'quantum-shield-v2-secret').digest('hex');
   return Buffer.from(hash, 'hex').subarray(0, 32);
 }
 
-export async function createChannelForUser(
+// ============================================================
+// Chat key management
+// ============================================================
+
+export async function createChatForUser(
   userId: string,
   name: string,
-  description: string | null,
-  password: string,
-  rounds?: number
+  password: string
 ) {
   const user = await db.user.findUnique({ where: { id: userId } });
   if (!user) throw new Error('User not found');
 
-  // Derive user master key from password + stored salt
-  const { deriveKeyFromPassword } = await import('./crypto');
   const userMasterKey = deriveKeyFromPassword(password, user.masterKeySalt);
+  const { key: chatKey, salt: _ckSalt } = generateMasterKey();
 
-  // Generate a unique channel key
-  const { key: channelKey, salt: _ckSalt } = generateMasterKey();
-
-  // Encrypt the channel key with the user's master key (for web UI)
-  const encryptedKey = encryptChannelKey(channelKey, userMasterKey);
-  // Encrypt the channel key with server key (for API access via API keys)
+  const encryptedKey = encryptChatKey(chatKey, userMasterKey);
   const serverKey = getServerKey();
-  const apiEncryptedKey = encryptChannelKey(channelKey, serverKey);
+  const apiEncryptedKey = encryptChatKey(chatKey, serverKey);
 
-  const channel = await db.channel.create({
+  const chat = await db.chat.create({
     data: {
       name,
-      description,
-      adminId: userId,
+      ownerId: userId,
       encryptedKey,
       apiEncryptedKey,
-      rounds: rounds ?? 4,
+      members: { connect: { id: userId } },
     },
   });
 
-  return channel;
+  return chat;
 }
 
-export async function getChannelDecryptionKey(
-  channelId: string,
-  userId: string,
-  password: string
-): Promise<Buffer> {
-  const channel = await db.channel.findFirst({
-    where: { id: channelId, adminId: userId },
-  });
-  if (!channel) throw new Error('Channel not found');
-
+export async function getChatKeyByPassword(chatId: string, userId: string, password: string): Promise<Buffer> {
+  const chat = await db.chat.findFirst({ where: { id: chatId, ownerId: userId } });
+  if (!chat) throw new Error('Chat not found');
   const user = await db.user.findUnique({ where: { id: userId } });
   if (!user) throw new Error('User not found');
-
-  const { deriveKeyFromPassword } = await import('./crypto');
   const userMasterKey = deriveKeyFromPassword(password, user.masterKeySalt);
-  return decryptChannelKey(channel.encryptedKey, userMasterKey);
+  return decryptChatKey(chat.encryptedKey, userMasterKey);
 }
 
-export async function getChannelDecryptionKeyByApiKey(
-  channelId: string,
-  apiKey: string
-): Promise<Buffer> {
+export async function getChatKeyByApiKey(chatId: string, apiKey: string): Promise<Buffer> {
   const user = await getUserByApiKey(apiKey);
   if (!user) throw new Error('Invalid API key');
-
-  const channel = await db.channel.findFirst({
-    where: { id: channelId, adminId: user.id },
-  });
-  if (!channel) throw new Error('Channel not found');
-
-  const { decryptChannelKey } = await import('./crypto');
-  const serverKey = getServerKey();
-  return decryptChannelKey(channel.apiEncryptedKey, serverKey);
+  const chat = await db.chat.findFirst({ where: { id: chatId, ownerId: user.id } });
+  if (!chat) throw new Error('Chat not found');
+  return decryptChatKey(chat.apiEncryptedKey, getServerKey());
 }
 
 // ============================================================
-// Verification tokens
+// Rate limiting
 // ============================================================
 
-export async function createVerificationToken(userId: string): Promise<string> {
-  const token = generateVerificationToken();
-  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+export const DAILY_LIMIT = 90000;
+export const MONTHLY_LIMIT = 200000;
 
-  await db.verificationToken.create({
-    data: {
-      token,
-      userId,
-      expiresAt,
-    },
-  });
+export async function checkRateLimit(userId: string): Promise<{ allowed: boolean; dailyRemaining: number; monthlyRemaining: number }> {
+  const now = new Date();
+  const dayKey = now.toISOString().slice(0, 10);      // "2026-07-01"
+  const monthKey = now.toISOString().slice(0, 7);      // "2026-07"
 
-  return token;
+  const [daily, monthly] = await Promise.all([
+    db.rateLimit.findUnique({ where: { userId_period_periodKey: { userId, period: 'daily', periodKey: dayKey } } }),
+    db.rateLimit.findUnique({ where: { userId_period_periodKey: { userId, period: 'monthly', periodKey: monthKey } } }),
+  ]);
+
+  const dailyCount = daily?.count ?? 0;
+  const monthlyCount = monthly?.count ?? 0;
+
+  if (dailyCount >= DAILY_LIMIT || monthlyCount >= MONTHLY_LIMIT) {
+    return { allowed: false, dailyRemaining: DAILY_LIMIT - dailyCount, monthlyRemaining: MONTHLY_LIMIT - monthlyCount };
+  }
+
+  return { allowed: true, dailyRemaining: DAILY_LIMIT - dailyCount, monthlyRemaining: MONTHLY_LIMIT - monthlyCount };
 }
 
-export async function verifyEmailToken(token: string): Promise<boolean> {
-  const record = await db.verificationToken.findUnique({
-    where: { token },
-  });
+export async function incrementRateLimit(userId: string): Promise<void> {
+  const now = new Date();
+  const dayKey = now.toISOString().slice(0, 10);
+  const monthKey = now.toISOString().slice(0, 7);
 
-  if (!record) return false;
-  if (record.used) return false;
-  if (record.expiresAt < new Date()) return false;
-
-  await db.verificationToken.update({
-    where: { id: record.id },
-    data: { used: true },
-  });
-
-  await db.user.update({
-    where: { id: record.userId },
-    data: { isVerified: true },
-  });
-
-  return true;
+  await Promise.all([
+    db.rateLimit.upsert({
+      where: { userId_period_periodKey: { userId, period: 'daily', periodKey: dayKey } },
+      create: { userId, period: 'daily', periodKey: dayKey, count: 1 },
+      update: { count: { increment: 1 } },
+    }),
+    db.rateLimit.upsert({
+      where: { userId_period_periodKey: { userId, period: 'monthly', periodKey: monthKey } },
+      create: { userId, period: 'monthly', periodKey: monthKey, count: 1 },
+      update: { count: { increment: 1 } },
+    }),
+  ]);
 }

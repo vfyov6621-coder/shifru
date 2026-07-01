@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSessionUser, getChannelDecryptionKey, getUserByApiKey, getChannelDecryptionKeyByApiKey } from '@/lib/auth';
-import { cyclicDecrypt } from '@/lib/crypto';
+import { getSessionUser, getChatKeyByPassword, getUserByApiKey, getChatKeyByApiKey, checkRateLimit, incrementRateLimit } from '@/lib/auth';
+import { chainDecrypt, type EncryptedPayload, type ChainMethod } from '@/lib/crypto';
 import { db } from '@/lib/db';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { encrypted, channelId, rounds, password } = body;
-
-    if (!encrypted || !channelId || !rounds) {
-      return NextResponse.json({ error: 'Encrypted data, channelId, and rounds are required' }, { status: 400 });
+    const { encrypted, chatId, chain, password } = body;
+    if (!encrypted || !chatId || !chain) {
+      return NextResponse.json({ error: 'encrypted, chatId и chain обязательны' }, { status: 400 });
     }
 
-    let channelKey: Buffer;
+    let chatKey: Buffer;
     let userId: string;
 
     const authHeader = req.headers.get('authorization');
@@ -20,49 +19,35 @@ export async function POST(req: NextRequest) {
 
     if (authHeader?.startsWith('Bearer ')) {
       const session = await getSessionUser(req);
-      if (!session) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
-      if (!password) {
-        return NextResponse.json({ error: 'Password is required for web UI decryption' }, { status: 400 });
-      }
+      if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      if (!password) return NextResponse.json({ error: 'Пароль обязателен' }, { status: 400 });
       userId = session.userId;
-      channelKey = await getChannelDecryptionKey(channelId, userId, password);
+      chatKey = await getChatKeyByPassword(chatId, userId, password);
     } else if (apiKeyHeader) {
       const user = await getUserByApiKey(apiKeyHeader);
-      if (!user) {
-        return NextResponse.json({ error: 'Invalid API key' }, { status: 401 });
-      }
+      if (!user) return NextResponse.json({ error: 'Неверный API-ключ' }, { status: 401 });
       userId = user.id;
-      channelKey = await getChannelDecryptionKeyByApiKey(channelId, apiKeyHeader);
+      chatKey = await getChatKeyByApiKey(chatId, apiKeyHeader);
     } else {
-      return NextResponse.json({ error: 'Authorization required' }, { status: 401 });
+      return NextResponse.json({ error: 'Требуется авторизация' }, { status: 401 });
     }
 
-    const result = cyclicDecrypt(
-      { data: encrypted, rounds, version: 1 },
-      channelKey
-    );
+    const { allowed, dailyRemaining, monthlyRemaining } = await checkRateLimit(userId);
+    if (!allowed) {
+      return NextResponse.json({ error: 'Лимит запросов исчерпан', dailyRemaining, monthlyRemaining }, { status: 429 });
+    }
 
-    const decrypted = result.toString('utf-8');
+    const payload: EncryptedPayload = { data: encrypted, chain: chain as ChainMethod[], version: 2 };
+    const decrypted = chainDecrypt(payload, chatKey);
 
     await db.encryptionLog.create({
-      data: {
-        action: 'decrypt',
-        channelId,
-        userId,
-        inputLen: encrypted.length,
-        outputLen: decrypted.length,
-      },
+      data: { action: 'decrypt', chatId, userId, inputLen: encrypted.length, outputLen: decrypted.length },
     });
+    await incrementRateLimit(userId);
 
-    return NextResponse.json({
-      decrypted,
-      channelId,
-    });
+    return NextResponse.json({ decrypted, chatId });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : 'Decryption failed — data may be corrupted or wrong channel/key';
-    console.error('Decrypt error:', error);
+    const msg = error instanceof Error ? error.message : 'Ошибка дешифровки';
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

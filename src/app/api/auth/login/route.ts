@@ -1,42 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { verifyPassword, createToken } from '@/lib/auth';
+import { verifyPassword, createToken, incrementRateLimit, checkRateLimit } from '@/lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { email, password } = body;
-
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    const { login, password } = await req.json();
+    if (!login || !password) {
+      return NextResponse.json({ error: 'Логин и пароль обязательны' }, { status: 400 });
     }
 
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await db.user.findUnique({ where: { login } });
     if (!user) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
-    }
-
-    if (!user.isVerified) {
-      return NextResponse.json({ error: 'Email not verified. Please check your verification code.' }, { status: 403 });
+      return NextResponse.json({ error: 'Неверные данные' }, { status: 401 });
     }
 
     const valid = await verifyPassword(user.passwordHash, password);
     if (!valid) {
-      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
+      return NextResponse.json({ error: 'Неверные данные' }, { status: 401 });
     }
 
-    const token = await createToken({ userId: user.id, email: user.email });
-
-    return NextResponse.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-      },
-    });
+    const token = await createToken({ userId: user.id, login: user.login });
+    return NextResponse.json({ token, user: { id: user.id, login: user.login } });
   } catch (error) {
     console.error('Login error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }

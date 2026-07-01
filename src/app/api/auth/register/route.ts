@@ -1,48 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { hashPassword, createToken, createVerificationToken } from '@/lib/auth';
+import { hashPassword, createToken } from '@/lib/auth';
 import { generateMasterKey } from '@/lib/crypto';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { email, password, name } = body;
-
-    if (!email || !password) {
-      return NextResponse.json({ error: 'Email and password are required' }, { status: 400 });
+    const { login, password } = await req.json();
+    if (!login || !password) {
+      return NextResponse.json({ error: 'Логин и пароль обязательны' }, { status: 400 });
+    }
+    if (login.length < 3) {
+      return NextResponse.json({ error: 'Логин минимум 3 символа' }, { status: 400 });
+    }
+    if (password.length < 6) {
+      return NextResponse.json({ error: 'Пароль минимум 6 символов' }, { status: 400 });
     }
 
-    if (password.length < 8) {
-      return NextResponse.json({ error: 'Password must be at least 8 characters' }, { status: 400 });
-    }
-
-    const existing = await db.user.findUnique({ where: { email } });
+    const existing = await db.user.findUnique({ where: { login } });
     if (existing) {
-      return NextResponse.json({ error: 'Email already registered' }, { status: 409 });
+      return NextResponse.json({ error: 'Логин занят' }, { status: 409 });
     }
 
     const { salt } = generateMasterKey();
-    const masterKeySalt = salt;
     const passwordHash = await hashPassword(password);
 
     const user = await db.user.create({
-      data: {
-        email,
-        name: name || null,
-        passwordHash,
-        masterKeySalt,
-      },
+      data: { login, passwordHash, masterKeySalt: salt },
     });
 
-    const verificationToken = await createVerificationToken(user.id);
-
-    return NextResponse.json({
-      message: 'Registration successful. Please verify your email.',
-      userId: user.id,
-      verificationToken,
-    }, { status: 201 });
+    const token = await createToken({ userId: user.id, login: user.login });
+    return NextResponse.json({ token, user: { id: user.id, login: user.login } }, { status: 201 });
   } catch (error) {
-    console.error('Registration error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Register error:', error);
+    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }

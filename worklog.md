@@ -1,21 +1,23 @@
 ---
 Task ID: 1
 Agent: Main Agent
-Task: Построить сайт QuantumShield — квантово-устойчивое шифрование с открытым API
+Task: Полная переработка QuantumShield v2 — цепочечное шифрование
 
 Work Log:
-- Обновил Prisma схему: User, VerificationToken, Channel (с apiEncryptedKey), ApiKey, EncryptionLog
-- Создал lib/crypto.ts: AES-256-GCM циклическое шифрование, HKDF-SHA512 деривация ключей, PBKDF2 для мастер-ключей
-- Создал lib/auth.ts: Argon2id хеширование паролей, JWT сессии, API-ключ аутентификация, верификация email
-- Создал API маршруты: /api/auth/register, /api/auth/login, /api/auth/verify, /api/channels, /api/encrypt, /api/decrypt, /api/api-keys, /api/me
-- Обновил globals.css: тёмная тема с изумрудными акцентами (cyberpunk/security стиль)
-- Построил полный SPA в page.tsx: авторизация (регистрация/вход/верификация), дашборд с 4 вкладками (Шифрование, Каналы, API-ключи, API Docs)
-- Протестировал полный цикл через Agent Browser: регистрация → верификация → вход → создание канала → шифрование → дешифровка
-- Подтвердил свойства шифрования: разные выходы при одинаковых входах, корректная дешифровка, отказ при неверном ключе
+- Переработал Prisma схему: User(login), Chat(ownerId+members), RateLimit, убрал VerificationToken
+- Переписал crypto.ts: цепочечные преобразования (unicode→binary→decimal→TLS→SSL) + AES-256-GCM внешний слой
+- Исправил toBinary/fromBinary для UTF-8 через Buffer (многобайтовые символы)
+- Исправил encryptPasswordThroughService на детерминированную (IV от хеша пароля)
+- Обновил auth.ts: логин без email, пароль шифруется через сервис→Argon2id, rate limiting
+- Обновил все API маршруты: register(3 поля), login, channels, encrypt, decrypt, api-keys, me
+- Добавил rate limiting: 90 000/день, 200 000/месяц через RateLimit таблицу
+- Перестроил UI: чёрно-белый минимализм, 5 вкладок, 3 поля регистрации
+- Интеграционный тест (test_full.ts): ВСЕ ТЕСТЫ ПРОЙДЕНЫ
 
 Stage Summary:
-- Все API вызовы возвращают 200, ошибок в dev.log нет
-- ESLint проходит без ошибок
-- Шифрование и дешифровка работают корректно
-- Циклическое шифрование: 4 раунда AES-256-GCM с HKDF-деривацией ключей
-- Квантовая устойчивость: AES-256 → 128 бит при Гровере + Argon2id (memory-hard)
+- Цепочечное шифрование: рандомный порядок 5-10 методов, каждый раз разный
+- TLS: HMAC-SHA256 stream cipher + XOR, SSL: bit rotation + substitution + XOR
+- Два шифрования одного текста → разные цепочки и разные шифртексты ✓
+- Дешифровка обоих → исходный текст ✓
+- Rate limit: 90000 → 89999 после одного запроса ✓
+- Пароль шифруется через сервис перед Argon2id хешированием ✓

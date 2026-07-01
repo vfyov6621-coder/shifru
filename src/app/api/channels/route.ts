@@ -1,69 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { getSessionUser } from '@/lib/auth';
+import { getSessionUser, createChatForUser } from '@/lib/auth';
 
 export async function GET(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const channels = await db.channel.findMany({
-      where: { adminId: session.userId },
+    const chats = await db.chat.findMany({
+      where: { ownerId: session.userId },
       select: {
-        id: true,
-        name: true,
-        description: true,
-        rounds: true,
-        createdAt: true,
+        id: true, name: true, createdAt: true,
         _count: { select: { encryptionLogs: true } },
+        members: { select: { id: true, login: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ channels });
+    return NextResponse.json({ chats });
   } catch (error) {
-    console.error('Get channels error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    console.error('Get chats error:', error);
+    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }
 
 export async function POST(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const body = await req.json();
-    const { name, description, rounds, password } = body;
-
+    const { name, password } = await req.json();
     if (!name || !password) {
-      return NextResponse.json({ error: 'Channel name and your password are required' }, { status: 400 });
+      return NextResponse.json({ error: 'Название и пароль обязательны' }, { status: 400 });
     }
 
-    const { createChannelForUser } = await import('@/lib/auth');
-    const channel = await createChannelForUser(
-      session.userId,
-      name,
-      description || null,
-      password,
-      rounds
-    );
-
+    const chat = await createChatForUser(session.userId, name, password);
     return NextResponse.json({
-      channel: {
-        id: channel.id,
-        name: channel.name,
-        description: channel.description,
-        rounds: channel.rounds,
-        createdAt: channel.createdAt,
-      },
+      chat: { id: chat.id, name: chat.name, createdAt: chat.createdAt },
     }, { status: 201 });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : 'Internal server error';
-    console.error('Create channel error:', error);
+    const msg = error instanceof Error ? error.message : 'Ошибка сервера';
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
@@ -71,30 +47,18 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const session = await getSessionUser(req);
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
     const { searchParams } = new URL(req.url);
-    const channelId = searchParams.get('id');
+    const chatId = searchParams.get('id');
+    if (!chatId) return NextResponse.json({ error: 'ID чата обязателен' }, { status: 400 });
 
-    if (!channelId) {
-      return NextResponse.json({ error: 'Channel ID is required' }, { status: 400 });
-    }
+    const chat = await db.chat.findFirst({ where: { id: chatId, ownerId: session.userId } });
+    if (!chat) return NextResponse.json({ error: 'Чат не найден' }, { status: 404 });
 
-    const channel = await db.channel.findFirst({
-      where: { id: channelId, adminId: session.userId },
-    });
-
-    if (!channel) {
-      return NextResponse.json({ error: 'Channel not found' }, { status: 404 });
-    }
-
-    await db.channel.delete({ where: { id: channelId } });
-
-    return NextResponse.json({ message: 'Channel deleted' });
+    await db.chat.delete({ where: { id: chatId } });
+    return NextResponse.json({ message: 'Чат удалён' });
   } catch (error) {
-    console.error('Delete channel error:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
   }
 }

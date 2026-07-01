@@ -1,16 +1,14 @@
 'use client';
 
 import { useState, useCallback, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Shield, Lock, Unlock, Key, Plus, Trash2, Copy, Check,
-  ChevronRight, LogOut, User, Globe, Book, Terminal,
-  Eye, EyeOff, RefreshCw, AlertTriangle, Zap, Layers
+  Lock, Unlock, Key, Plus, Trash2, Copy, LogOut,
+  Terminal, Eye, EyeOff, ChevronRight, ArrowRight,
+  Shield, Zap, Hash, Activity
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
@@ -18,1092 +16,540 @@ import { useToast } from '@/hooks/use-toast';
 // ============================================================
 // Types
 // ============================================================
-interface UserSession {
-  token: string;
-  user: { id: string; email: string; name: string | null };
-}
-
-interface Channel {
-  id: string;
-  name: string;
-  description: string | null;
-  rounds: number;
-  createdAt: string;
-  _count: { encryptionLogs: number };
-}
-
-interface ApiKeyRecord {
-  id: string;
-  name: string;
-  keyPrefix: string;
-  lastUsed: string | null;
-  createdAt: string;
-}
-
-type View = 'register' | 'login' | 'verify' | 'dashboard';
-type Tab = 'encrypt' | 'channels' | 'api-keys' | 'docs';
+interface Session { token: string; user: { id: string; login: string } }
+interface Chat { id: string; name: string; createdAt: string; _count: { encryptionLogs: number } }
+interface ApiKeyRec { id: string; name: string; keyPrefix: string; lastUsed: string | null; createdAt: string }
+type View = 'auth' | 'app';
+type Tab = 'encrypt' | 'chats' | 'keys' | 'docs' | 'info';
 
 // ============================================================
-// Main App
+// Main
 // ============================================================
 export default function Home() {
-  const [view, setView] = useState<View>('login');
-  const [session, setSession] = useState<UserSession | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('encrypt');
+  const [view, setView] = useState<View>('auth');
+  const [session, setSession] = useState<Session | null>(null);
+  const [tab, setTab] = useState<Tab>('encrypt');
   const [loading, setLoading] = useState(false);
-
-  // Auth state
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [verifyToken, setVerifyToken] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [regToken, setRegToken] = useState('');
-
-  // Dashboard state
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
-  const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
-  const [encryptInput, setEncryptInput] = useState('');
-  const [encryptOutput, setEncryptOutput] = useState('');
-  const [decryptInput, setDecryptInput] = useState('');
-  const [decryptRounds, setDecryptRounds] = useState(4);
-  const [decryptOutput, setDecryptOutput] = useState('');
-  const [opLoading, setOpLoading] = useState(false);
-
-  // New channel
-  const [newChannelName, setNewChannelName] = useState('');
-  const [newChannelDesc, setNewChannelDesc] = useState('');
-  const [newChannelRounds, setNewChannelRounds] = useState(4);
-  const [showNewChannel, setShowNewChannel] = useState(false);
-
-  // New API key
-  const [newKeyName, setNewKeyName] = useState('');
-  const [createdApiKey, setCreatedApiKey] = useState('');
-
   const { toast } = useToast();
 
-  // Restore session
+  // Auth
+  const [login, setLogin] = useState('');
+  const [password, setPassword] = useState('');
+  const [password2, setPassword2] = useState('');
+  const [isRegister, setIsRegister] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [showPass, setShowPass] = useState(false);
+
+  // Encrypt/Decrypt
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
+  const [encInput, setEncInput] = useState('');
+  const [encOutput, setEncOutput] = useState('');
+  const [encChain, setEncChain] = useState<string[]>([]);
+  const [decInput, setDecInput] = useState('');
+  const [decChain, setDecChain] = useState<string[]>([]);
+  const [decOutput, setDecOutput] = useState('');
+  const [opLoading, setOpLoading] = useState(false);
+
+  // Chats
+  const [newChatName, setNewChatName] = useState('');
+  const [showNewChat, setShowNewChat] = useState(false);
+
+  // API keys
+  const [apiKeys, setApiKeys] = useState<ApiKeyRec[]>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [createdKey, setCreatedKey] = useState('');
+
+  // Rate limits
+  const [dailyLeft, setDailyLeft] = useState(90000);
+  const [monthlyLeft, setMonthlyLeft] = useState(200000);
+
+  const headers = () => ({ Authorization: `Bearer ${session?.token}`, 'Content-Type': 'application/json' });
+
   useEffect(() => {
-    const stored = localStorage.getItem('qs_session');
-    if (stored) {
-      try {
-        const s = JSON.parse(stored) as UserSession;
-        setSession(s);
-        setView('dashboard');
-      } catch { /* ignore */ }
-    }
+    const s = localStorage.getItem('qs2');
+    if (s) { try { const p = JSON.parse(s); setSession(p); setView('app'); } catch {} }
   }, []);
 
-  // Load data when entering dashboard
-  const loadDashboard = useCallback(async () => {
+  const load = useCallback(async () => {
+    if (!session) return;
     try {
-      const [chRes, akRes] = await Promise.all([
-        fetch('/api/channels', { headers: { Authorization: `Bearer ${session?.token}` } }),
-        fetch('/api/api-keys', { headers: { Authorization: `Bearer ${session?.token}` } }),
+      const [c, k, m] = await Promise.all([
+        fetch('/api/channels', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+        fetch('/api/api-keys', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
+        fetch('/api/me', { headers: { Authorization: `Bearer ${session.token}` } }).then(r => r.json()),
       ]);
-      if (chRes.ok) {
-        const chData = await chRes.json();
-        setChannels(chData.channels || []);
-      }
-      if (akRes.ok) {
-        const akData = await akRes.json();
-        setApiKeys(akData.keys || []);
-      }
-    } catch (e) {
-      console.error('Load dashboard error:', e);
-    }
-  }, [session?.token]);
+      setChats(c.chats || []);
+      setApiKeys(k.keys || []);
+      if (m.rateLimits) { setDailyLeft(m.rateLimits.dailyRemaining); setMonthlyLeft(m.rateLimits.monthlyRemaining); }
+    } catch (e) { console.error(e); }
+  }, [session]);
 
-  useEffect(() => {
-    if (view === 'dashboard' && session) {
-      loadDashboard();
-    }
-  }, [view, session, loadDashboard]);
+  useEffect(() => { if (view === 'app' && session) load(); }, [view, session, load]);
 
-  // ============================================================
-  // Auth handlers
-  // ============================================================
-  const handleRegister = async () => {
-    setLoading(true);
-    setAuthError('');
+  // Auth
+  const handleAuth = async () => {
+    setLoading(true); setAuthError('');
     try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name }),
-      });
+      const url = isRegister ? '/api/auth/register' : '/api/auth/login';
+      const body = isRegister ? { login, password } : { login, password };
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-        return;
-      }
-      setRegToken(data.verificationToken);
-      setView('verify');
-      toast({ title: 'Код верификации', description: 'В демо-режиме код показан ниже. В продакшене — отправка на email.' });
-    } catch {
-      setAuthError('Ошибка соединения с сервером');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerify = async () => {
-    setLoading(true);
-    setAuthError('');
-    try {
-      const res = await fetch('/api/auth/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: verifyToken || regToken }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-        return;
-      }
-      toast({ title: 'Email подтверждён!', description: 'Теперь можно войти.' });
-      setView('login');
-    } catch {
-      setAuthError('Ошибка соединения');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    setLoading(true);
-    setAuthError('');
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-        return;
-      }
+      if (!res.ok) { setAuthError(data.error); return; }
       setSession({ token: data.token, user: data.user });
-      localStorage.setItem('qs_session', JSON.stringify({ token: data.token, user: data.user }));
-      setView('dashboard');
-      toast({ title: 'Добро пожаловать!' });
-    } catch {
-      setAuthError('Ошибка соединения');
-    } finally {
-      setLoading(false);
-    }
+      localStorage.setItem('qs2', JSON.stringify({ token: data.token, user: data.user }));
+      setView('app');
+      toast({ title: isRegister ? 'Аккаунт создан' : 'Вход выполнен' });
+    } catch { setAuthError('Ошибка соединения'); } finally { setLoading(false); }
   };
 
-  const handleLogout = () => {
-    setSession(null);
-    localStorage.removeItem('qs_session');
-    setView('login');
-    setChannels([]);
-    setApiKeys([]);
-    setSelectedChannel(null);
+  // Encrypt
+  const handleEncrypt = async () => {
+    if (!selectedChat || !encInput) return;
+    setOpLoading(true);
+    try {
+      const res = await fetch('/api/encrypt', { method: 'POST', headers: headers(), body: JSON.stringify({ data: encInput, chatId: selectedChat.id, password }) });
+      const data = await res.json();
+      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+      setEncOutput(data.encrypted);
+      setEncChain(data.chain);
+      setDecInput(data.encrypted);
+      setDecChain(data.chain);
+      setDecOutput('');
+      toast({ title: `Зашифровано · цепочка: ${data.chain.join(' → ')}` });
+    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
   };
 
-  // ============================================================
-  // Channel handlers
-  // ============================================================
-  const handleCreateChannel = async () => {
-    if (!newChannelName.trim()) return;
+  // Decrypt
+  const handleDecrypt = async () => {
+    if (!selectedChat || !decInput) return;
+    setOpLoading(true);
+    try {
+      const res = await fetch('/api/decrypt', { method: 'POST', headers: headers(), body: JSON.stringify({ encrypted: decInput, chatId: selectedChat.id, chain: decChain, password }) });
+      const data = await res.json();
+      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+      setDecOutput(data.decrypted);
+      toast({ title: 'Расшифровано' });
+    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setOpLoading(false); }
+  };
+
+  // Chat CRUD
+  const handleCreateChat = async () => {
+    if (!newChatName.trim()) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/channels', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.token}`,
-        },
-        body: JSON.stringify({
-          name: newChannelName,
-          description: newChannelDesc || null,
-          rounds: newChannelRounds,
-          password,
-        }),
-      });
+      const res = await fetch('/api/channels', { method: 'POST', headers: headers(), body: JSON.stringify({ name: newChatName, password }) });
       const data = await res.json();
-      if (!res.ok) {
-        toast({ title: 'Ошибка', description: data.error, variant: 'destructive' });
-        return;
-      }
-      toast({ title: 'Канал создан!', description: `"${newChannelName}" с ${newChannelRounds} раундами шифрования` });
-      setNewChannelName('');
-      setNewChannelDesc('');
-      setShowNewChannel(false);
-      loadDashboard();
-    } catch {
-      toast({ title: 'Ошибка', description: 'Не удалось создать канал', variant: 'destructive' });
-    } finally {
-      setLoading(false);
-    }
+      if (!res.ok) { toast({ title: 'Ошибка', description: data.error, variant: 'destructive' }); return; }
+      toast({ title: `Чат "${newChatName}" создан` });
+      setNewChatName(''); setShowNewChat(false); load();
+    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); } finally { setLoading(false); }
   };
 
-  const handleDeleteChannel = async (id: string) => {
-    try {
-      await fetch(`/api/channels?id=${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${session?.token}` },
-      });
-      toast({ title: 'Канал удалён' });
-      if (selectedChannel?.id === id) setSelectedChannel(null);
-      loadDashboard();
-    } catch {
-      toast({ title: 'Ошибка удаления', variant: 'destructive' });
-    }
+  const handleDeleteChat = async (id: string) => {
+    await fetch(`/api/channels?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+    toast({ title: 'Чат удалён' });
+    if (selectedChat?.id === id) setSelectedChat(null);
+    load();
   };
 
-  // ============================================================
-  // Encrypt / Decrypt
-  // ============================================================
-  const handleEncrypt = async () => {
-    if (!selectedChannel || !encryptInput) return;
-    setOpLoading(true);
-    try {
-      const res = await fetch('/api/encrypt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.token}`,
-        },
-        body: JSON.stringify({
-          data: encryptInput,
-          channelId: selectedChannel.id,
-          password,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        toast({ title: 'Ошибка шифрования', description: data.error, variant: 'destructive' });
-        return;
-      }
-      setEncryptOutput(data.encrypted);
-      setDecryptInput(data.encrypted);
-      setDecryptRounds(data.rounds);
-      toast({ title: 'Зашифровано!', description: `${data.rounds} раундов через канал "${selectedChannel.name}"` });
-    } catch {
-      toast({ title: 'Ошибка', description: 'Не удалось зашифровать', variant: 'destructive' });
-    } finally {
-      setOpLoading(false);
-    }
-  };
-
-  const handleDecrypt = async () => {
-    if (!selectedChannel || !decryptInput) return;
-    setOpLoading(true);
-    try {
-      const res = await fetch('/api/decrypt', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.token}`,
-        },
-        body: JSON.stringify({
-          encrypted: decryptInput,
-          channelId: selectedChannel.id,
-          rounds: decryptRounds,
-          password,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        toast({ title: 'Ошибка дешифровки', description: data.error, variant: 'destructive' });
-        return;
-      }
-      setDecryptOutput(data.decrypted);
-      toast({ title: 'Расшифровано!' });
-    } catch {
-      toast({ title: 'Ошибка', description: 'Не удалось расшифровать', variant: 'destructive' });
-    } finally {
-      setOpLoading(false);
-    }
-  };
-
-  // ============================================================
-  // API Keys
-  // ============================================================
-  const handleCreateApiKey = async () => {
+  // API keys
+  const handleCreateKey = async () => {
     if (!newKeyName.trim()) return;
     try {
-      const res = await fetch('/api/api-keys', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${session?.token}`,
-        },
-        body: JSON.stringify({ name: newKeyName }),
-      });
+      const res = await fetch('/api/api-keys', { method: 'POST', headers: headers(), body: JSON.stringify({ name: newKeyName }) });
       const data = await res.json();
-      if (!res.ok) {
-        toast({ title: 'Ошибка', description: data.error, variant: 'destructive' });
-        return;
-      }
-      setCreatedApiKey(data.apiKey);
-      setNewKeyName('');
-      toast({ title: 'API-ключ создан!', description: 'Скопируйте его — он больше не будет показан' });
-      loadDashboard();
-    } catch {
-      toast({ title: 'Ошибка', variant: 'destructive' });
-    }
+      if (!res.ok) { toast({ title: 'Ошибка', variant: 'destructive' }); return; }
+      setCreatedKey(data.apiKey); setNewKeyName('');
+      toast({ title: 'API-ключ создан — сохраните его!' });
+      load();
+    } catch { toast({ title: 'Ошибка', variant: 'destructive' }); }
   };
 
-  const handleDeleteApiKey = async (id: string) => {
-    try {
-      await fetch(`/api/api-keys?id=${id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${session?.token}` },
-      });
-      toast({ title: 'API-ключ удалён' });
-      loadDashboard();
-    } catch {
-      toast({ title: 'Ошибка', variant: 'destructive' });
-    }
+  const handleDeleteKey = async (id: string) => {
+    await fetch(`/api/api-keys?id=${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${session?.token}` } });
+    load();
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: 'Скопировано!' });
-  };
+  const copy = (text: string) => { navigator.clipboard.writeText(text); toast({ title: 'Скопировано' }); };
+
+  const handleLogout = () => { setSession(null); localStorage.removeItem('qs2'); setView('auth'); setChats([]); setApiKeys([]); setSelectedChat(null); };
 
   // ============================================================
-  // Render Auth Views
+  // AUTH VIEW
   // ============================================================
-  const renderAuth = () => (
-    <div className="min-h-screen flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-        className="w-full max-w-md"
-      >
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
-            <Shield className="w-8 h-8 text-primary" />
+  if (view === 'auth') {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 bg-white">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 text-center">
+            <div className="inline-flex items-center justify-center w-12 h-12 rounded-full border-2 border-black mb-4">
+              <Shield className="w-5 h-5" />
+            </div>
+            <h1 className="text-xl font-bold tracking-tight">QuantumShield</h1>
+            <p className="text-xs text-neutral-500 mt-1">Цепочечное шифрование v2</p>
           </div>
-          <h1 className="text-3xl font-bold tracking-tight">QuantumShield</h1>
-          <p className="text-muted-foreground mt-2">Квантово-устойчивое циклическое шифрование</p>
-        </div>
 
-        <Card className="border-border/50 backdrop-blur-sm bg-card/80">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-lg">
-              {view === 'register' && 'Регистрация'}
-              {view === 'login' && 'Вход в систему'}
-              {view === 'verify' && 'Верификация email'}
-            </CardTitle>
-            <CardDescription>
-              {view === 'register' && 'Создайте аккаунт для управления ключами шифрования'}
-              {view === 'login' && 'Введите свои данные для доступа к дашборду'}
-              {view === 'verify' && 'Введите код верификации для подтверждения email'}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {authError && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm">
-                <AlertTriangle className="w-4 h-4 shrink-0" />
-                {authError}
+          <Card className="border-black">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-semibold">{isRegister ? 'Регистрация' : 'Вход'}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {authError && <p className="text-xs text-red-600">{authError}</p>}
+
+              {isRegister && (
+                <div>
+                  <label className="text-xs font-medium mb-1 block">Логин</label>
+                  <Input placeholder="username" value={login} onChange={e => setLogin(e.target.value)} className="border-black" />
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-medium mb-1 block">{isRegister ? 'Пароль' : 'Логин'}</label>
+                <div className="relative">
+                  <Input
+                    type={isRegister ? (showPass ? 'text' : 'password') : 'text'}
+                    placeholder={isRegister ? '••••••' : 'username'}
+                    value={isRegister ? password : login}
+                    onChange={e => isRegister ? setPassword(e.target.value) : setLogin(e.target.value)}
+                    className={isRegister ? 'pr-9 border-black' : 'border-black'}
+                  />
+                  {isRegister && (
+                    <button type="button" onClick={() => setShowPass(!showPass)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-neutral-400">
+                      {showPass ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  )}
+                </div>
               </div>
-            )}
 
-            {view === 'register' && (
-              <>
+              {isRegister && (
                 <div>
-                  <label className="text-sm font-medium mb-1.5 block">Имя (необязательно)</label>
-                  <Input
-                    placeholder="Ваше имя"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                  />
+                  <label className="text-xs font-medium mb-1 block">Повторите пароль</label>
+                  <Input type="password" placeholder="••••••" value={password2} onChange={e => setPassword2(e.target.value)} className="border-black" />
                 </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Email</label>
-                  <Input
-                    type="email"
-                    placeholder="admin@example.com"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Пароль (мин. 8 символов)</label>
-                  <div className="relative">
-                    <Input
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <Button onClick={handleRegister} className="w-full" disabled={loading}>
-                  {loading ? 'Создание аккаунта...' : 'Зарегистрироваться'}
-                </Button>
-                <p className="text-center text-sm text-muted-foreground">
-                  Уже есть аккаунт?{' '}
-                  <button onClick={() => { setView('login'); setAuthError(''); }} className="text-primary hover:underline">
-                    Войти
-                  </button>
-                </p>
-              </>
-            )}
+              )}
 
-            {view === 'login' && (
-              <>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Email</label>
-                  <Input
-                    type="email"
-                    placeholder="admin@example.com"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Пароль</label>
-                  <div className="relative">
-                    <Input
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      className="pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
-                <Button onClick={handleLogin} className="w-full" disabled={loading}>
-                  {loading ? 'Вход...' : 'Войти'}
-                </Button>
-                <p className="text-center text-sm text-muted-foreground">
-                  Нет аккаунта?{' '}
-                  <button onClick={() => { setView('register'); setAuthError(''); }} className="text-primary hover:underline">
-                    Зарегистрироваться
-                  </button>
-                </p>
-              </>
-            )}
+              <Button onClick={() => {
+                if (isRegister && password !== password2) { setAuthError('Пароли не совпадают'); return; }
+                handleAuth();
+              }} className="w-full bg-black text-white hover:bg-neutral-800" disabled={loading || (isRegister && (!login || !password || !password2)) || (!isRegister && (!login || !password))}>
+                {loading ? '...' : (isRegister ? 'Создать аккаунт' : 'Войти')}
+              </Button>
 
-            {view === 'verify' && (
-              <>
-                {regToken && (
-                  <div className="p-3 rounded-lg bg-primary/10 border border-primary/20 text-sm space-y-1">
-                    <p className="font-medium text-primary">Демо-код верификации:</p>
-                    <code className="text-xs break-all block font-mono">{regToken}</code>
-                    <p className="text-muted-foreground text-xs mt-1">В продакшене этот код отправляется на email</p>
-                  </div>
-                )}
-                <div>
-                  <label className="text-sm font-medium mb-1.5 block">Код верификации</label>
-                  <Input
-                    placeholder="Вставьте код из email..."
-                    value={verifyToken}
-                    onChange={e => setVerifyToken(e.target.value)}
-                  />
-                </div>
-                <Button onClick={handleVerify} className="w-full" disabled={loading}>
-                  {loading ? 'Проверка...' : 'Подтвердить email'}
-                </Button>
-              </>
-            )}
-          </CardContent>
-        </Card>
+              <p className="text-center text-xs text-neutral-400">
+                {isRegister ? 'Есть аккаунт?' : 'Нет аккаунта?'}
+                {' '}
+                <button onClick={() => { setIsRegister(!isRegister); setAuthError(''); }} className="underline text-black">
+                  {isRegister ? 'Войти' : 'Зарегистрироваться'}
+                </button>
+              </p>
+            </CardContent>
+          </Card>
 
-        <div className="flex items-center justify-center gap-4 mt-6 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1"><Lock className="w-3 h-3" /> AES-256-GCM</span>
-          <span className="flex items-center gap-1"><Layers className="w-3 h-3" /> Циклическое</span>
-          <span className="flex items-center gap-1"><Zap className="w-3 h-3" /> Argon2id</span>
-        </div>
-      </motion.div>
-    </div>
-  );
-
-  // ============================================================
-  // Render Dashboard
-  // ============================================================
-  const renderDashboard = () => (
-    <div className="min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-md">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-primary" />
-            <span className="font-semibold text-sm sm:text-base">QuantumShield</span>
+          <div className="flex items-center justify-center gap-3 mt-6 text-[10px] text-neutral-400">
+            <span>AES-256</span>
+            <span>·</span>
+            <span>Argon2id</span>
+            <span>·</span>
+            <span>Chain</span>
           </div>
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className="hidden sm:flex items-center gap-1 text-xs">
-              <User className="w-3 h-3" />
-              {session?.user.email}
-            </Badge>
-            <Button variant="ghost" size="sm" onClick={handleLogout} className="text-muted-foreground">
-              <LogOut className="w-4 h-4" />
-            </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // APP VIEW
+  // ============================================================
+  const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
+    { key: 'encrypt', label: 'Шифрование', icon: <Lock className="w-3.5 h-3.5" /> },
+    { key: 'chats', label: 'Чаты', icon: <Hash className="w-3.5 h-3.5" /> },
+    { key: 'keys', label: 'API', icon: <Key className="w-3.5 h-3.5" /> },
+    { key: 'docs', label: 'Документация', icon: <Terminal className="w-3.5 h-3.5" /> },
+    { key: 'info', label: 'Инфо', icon: <Activity className="w-3.5 h-3.5" /> },
+  ];
+
+  return (
+    <div className="min-h-screen flex flex-col bg-white">
+      {/* Header */}
+      <header className="border-b border-black sticky top-0 bg-white z-50">
+        <div className="max-w-5xl mx-auto px-4 h-12 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4" />
+            <span className="text-sm font-bold tracking-tight">QS</span>
+            <span className="text-xs text-neutral-400 font-mono">{session?.user.login}</span>
+          </div>
+          <div className="flex items-center gap-3 text-[10px] font-mono text-neutral-400">
+            <span>день: {dailyLeft.toLocaleString()}</span>
+            <span className="text-neutral-300">|</span>
+            <span>мес: {monthlyLeft.toLocaleString()}</span>
+            <button onClick={handleLogout} className="ml-2 p-1 hover:bg-neutral-100 rounded"><LogOut className="w-3.5 h-3.5" /></button>
           </div>
         </div>
       </header>
 
-      {/* Main */}
-      <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as Tab)}>
-          <TabsList className="grid w-full grid-cols-4 mb-6">
-            <TabsTrigger value="encrypt" className="text-xs sm:text-sm">
-              <Lock className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />
-              Шифрование
-            </TabsTrigger>
-            <TabsTrigger value="channels" className="text-xs sm:text-sm">
-              <Layers className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />
-              Каналы
-            </TabsTrigger>
-            <TabsTrigger value="api-keys" className="text-xs sm:text-sm">
-              <Key className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />
-              API-ключи
-            </TabsTrigger>
-            <TabsTrigger value="docs" className="text-xs sm:text-sm">
-              <Book className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" />
-              API Docs
-            </TabsTrigger>
-          </TabsList>
+      {/* Tabs */}
+      <div className="border-b border-black">
+        <div className="max-w-5xl mx-auto px-4 flex gap-0">
+          {tabs.map(t => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3 py-2.5 text-xs font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+                tab === t.key ? 'border-black text-black' : 'border-transparent text-neutral-400 hover:text-black'
+              }`}
+            >
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
-          {/* ========== ENCRYPT TAB ========== */}
-          <TabsContent value="encrypt" className="space-y-4">
-            {/* Channel selector */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Key className="w-4 h-4 text-primary" />
-                  Выберите канал шифрования
-                </CardTitle>
-                <CardDescription>
-                  Каждый канал имеет уникальный ключ. Групповой чат — один ключ, чат с Ваней — другой.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {channels.length === 0 ? (
-                  <div className="text-center py-6 text-muted-foreground text-sm">
-                    <Layers className="w-8 h-8 mx-auto mb-2 opacity-40" />
-                    Нет каналов. Создайте первый на вкладке &quot;Каналы&quot;.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {channels.map(ch => (
-                      <button
-                        key={ch.id}
-                        onClick={() => setSelectedChannel(ch)}
-                        className={`p-3 rounded-lg border text-left transition-all ${
-                          selectedChannel?.id === ch.id
-                            ? 'border-primary bg-primary/10 text-primary'
-                            : 'border-border hover:border-primary/40'
-                        }`}
-                      >
-                        <div className="font-medium text-sm">{ch.name}</div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {ch.rounds} раундов · {ch._count.encryptionLogs} операций
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+      {/* Content */}
+      <main className="flex-1 max-w-5xl mx-auto w-full px-4 py-6">
+        {/* ===== ENCRYPT TAB ===== */}
+        {tab === 'encrypt' && (
+          <div className="space-y-4">
+            {/* Chat selector */}
+            <div>
+              <p className="text-xs font-medium mb-2">ЧАТ</p>
+              {chats.length === 0 ? (
+                <p className="text-xs text-neutral-400 py-6 border border-dashed border-neutral-300 text-center">Нет чатов. Создайте на вкладке &quot;Чаты&quot;.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {chats.map(ch => (
+                    <button key={ch.id} onClick={() => setSelectedChat(ch)}
+                      className={`px-2.5 py-1.5 text-xs border transition-colors ${selectedChat?.id === ch.id ? 'border-black bg-black text-white' : 'border-neutral-300 hover:border-black'}`}>
+                      {ch.name}
+                      <span className="text-neutral-400 ml-1">{ch._count.encryptionLogs}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-            {selectedChannel && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {selectedChat && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Encrypt */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Lock className="w-4 h-4 text-primary" />
-                      Шифровать
-                    </CardTitle>
-                    <CardDescription>
-                      Канал: <span className="text-foreground font-medium">{selectedChannel.name}</span> · {selectedChannel.rounds} раундов
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <textarea
-                      className="w-full min-h-[120px] p-3 rounded-lg bg-input border border-border text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary/50"
-                      placeholder="Введите данные для шифрования..."
-                      value={encryptInput}
-                      onChange={e => setEncryptInput(e.target.value)}
-                    />
-                    <Button onClick={handleEncrypt} disabled={opLoading || !encryptInput} className="w-full">
-                      {opLoading ? (
-                        <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Шифрование...</>
-                      ) : (
-                        <><Lock className="w-4 h-4 mr-2" /> Зашифровать ({selectedChannel.rounds} раундов)</>
-                      )}
-                    </Button>
-                    {encryptOutput && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">Результат шифрования:</span>
-                          <Button variant="ghost" size="sm" onClick={() => copyToClipboard(encryptOutput)} className="h-7 text-xs">
-                            <Copy className="w-3 h-3 mr-1" /> Копировать
-                          </Button>
-                        </div>
-                        <div className="p-3 rounded-lg bg-muted/50 border border-border text-xs font-mono break-all max-h-32 overflow-y-auto">
-                          {encryptOutput}
-                        </div>
+                <div>
+                  <p className="text-xs font-medium mb-1.5">ШИФРОВАТЬ <span className="text-neutral-400">→ {selectedChat.name}</span></p>
+                  <textarea
+                    className="w-full min-h-[100px] p-2.5 border border-neutral-300 text-xs font-mono resize-y focus:outline-none focus:border-black bg-white"
+                    placeholder="Данные..."
+                    value={encInput}
+                    onChange={e => setEncInput(e.target.value)}
+                  />
+                  <Button onClick={handleEncrypt} disabled={opLoading || !encInput} size="sm" className="w-full mt-2 bg-black text-white hover:bg-neutral-800">
+                    {opLoading ? '...' : <><Lock className="w-3 h-3 mr-1" /> Шифровать</>}
+                  </Button>
+                  {encOutput && (
+                    <div className="mt-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] text-neutral-400">ЦЕПОЧКА: {encChain.join(' → ')}</span>
+                        <button onClick={() => copy(encOutput)} className="text-[10px] text-neutral-400 hover:text-black"><Copy className="w-3 h-3" /></button>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      <div className="p-2 border border-neutral-200 text-[10px] font-mono break-all max-h-24 overflow-y-auto bg-neutral-50">{encOutput}</div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Decrypt */}
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <Unlock className="w-4 h-4 text-primary" />
-                      Дешифровать
-                    </CardTitle>
-                    <CardDescription>
-                      Использует уникальный ключ канала &quot;{selectedChannel.name}&quot;
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div>
-                      <label className="text-xs text-muted-foreground mb-1 block">Раунды шифрования</label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={32}
-                        value={decryptRounds}
-                        onChange={e => setDecryptRounds(parseInt(e.target.value) || 4)}
-                      />
-                    </div>
-                    <textarea
-                      className="w-full min-h-[80px] p-3 rounded-lg bg-input border border-border text-sm font-mono resize-y focus:outline-none focus:ring-2 focus:ring-primary/50"
-                      placeholder="Вставьте зашифрованные данные..."
-                      value={decryptInput}
-                      onChange={e => setDecryptInput(e.target.value)}
-                    />
-                    <Button onClick={handleDecrypt} disabled={opLoading || !decryptInput} variant="outline" className="w-full">
-                      {opLoading ? (
-                        <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Дешифровка...</>
-                      ) : (
-                        <><Unlock className="w-4 h-4 mr-2" /> Расшифровать</>
-                      )}
-                    </Button>
-                    {decryptOutput && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-muted-foreground">Расшифрованные данные:</span>
-                          <Button variant="ghost" size="sm" onClick={() => copyToClipboard(decryptOutput)} className="h-7 text-xs">
-                            <Copy className="w-3 h-3 mr-1" /> Копировать
-                          </Button>
-                        </div>
-                        <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
-                          {decryptOutput}
-                        </div>
+                <div>
+                  <p className="text-xs font-medium mb-1.5">ДЕШИФРОВАТЬ <span className="text-neutral-400">→ {selectedChat.name}</span></p>
+                  <textarea
+                    className="w-full min-h-[100px] p-2.5 border border-neutral-300 text-xs font-mono resize-y focus:outline-none focus:border-black bg-white"
+                    placeholder="Шифртекст..."
+                    value={decInput}
+                    onChange={e => { setDecInput(e.target.value); setDecChain([]); }}
+                  />
+                  <textarea
+                    className="w-full min-h-[30px] p-2 border border-neutral-300 text-[10px] font-mono resize-y focus:outline-none focus:border-black bg-white mt-1"
+                    placeholder='Цепочка: ["ssl","tls","binary"]'
+                    value={decChain.length > 0 ? JSON.stringify(decChain) : ''}
+                    onChange={e => { try { setDecChain(JSON.parse(e.target.value)); } catch {} }}
+                  />
+                  <Button onClick={handleDecrypt} disabled={opLoading || !decInput || decChain.length === 0} variant="outline" size="sm" className="w-full mt-1">
+                    {opLoading ? '...' : <><Unlock className="w-3 h-3 mr-1" /> Дешифровать</>}
+                  </Button>
+                  {decOutput && (
+                    <div className="mt-2">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] text-neutral-400">РЕЗУЛЬТАТ</span>
+                        <button onClick={() => copy(decOutput)} className="text-[10px] text-neutral-400 hover:text-black"><Copy className="w-3 h-3" /></button>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                      <div className="p-2.5 border border-black text-xs bg-white">{decOutput}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {/* Cyclic demo */}
-            <Card className="border-primary/20">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <RefreshCw className="w-4 h-4 text-primary" />
-                  Как работает циклическое шифрование
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <div className="px-3 py-1.5 rounded-lg bg-muted">Данные</div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                  <div className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20">Раунд 1 (Ключ A)</div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                  <div className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20">Раунд 2 (Ключ B)</div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                  <div className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20">Раунд 3 (Ключ C)</div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                  <div className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary border border-primary/20">Раунд 4 (Ключ D)</div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                  <div className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-medium">Шифртекст</div>
-                </div>
-                <p className="text-xs text-muted-foreground mt-3">
-                  Каждый раунд использует уникальный ключ, полученный через HKDF-SHA512 от мастер-ключа канала.
-                  Даже одно и то же сообщение, зашифрованное дважды, даст абсолютно разный результат (благодаря случайным nonce/IV).
-                </p>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ========== CHANNELS TAB ========== */}
-          <TabsContent value="channels" className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">Каналы шифрования</h2>
-                <p className="text-sm text-muted-foreground">Управляйте ключами шифрования для разных контекстов</p>
+            {/* Chain diagram */}
+            <div className="border border-neutral-200 p-3 mt-4">
+              <p className="text-[10px] font-medium mb-2">КАЖДОЕ ШИФРОВАНИЕ — УНИКАЛЬНАЯ ЦЕПОЧКА</p>
+              <div className="flex flex-wrap items-center gap-1 text-[10px]">
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">данные</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">unicode</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">binary</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">decimal</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">TLS</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-1.5 py-0.5 bg-neutral-100 border border-neutral-300">SSL</span>
+                <ChevronRight className="w-3 h-3 text-neutral-300" />
+                <span className="px-2 py-0.5 bg-black text-white">AES-256-GCM</span>
               </div>
-              <Button onClick={() => setShowNewChannel(!showNewChannel)} size="sm">
-                <Plus className="w-4 h-4 mr-1.5" /> Новый канал
+              <p className="text-[10px] text-neutral-400 mt-2">Порядок методов рандомный. Методы могут повторяться. Дешифратор знает порядок.</p>
+            </div>
+          </div>
+        )}
+
+        {/* ===== CHATS TAB ===== */}
+        {tab === 'chats' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium">ЧАТЫ</p>
+              <Button onClick={() => setShowNewChat(!showNewChat)} variant="outline" size="sm" className="border-black">
+                <Plus className="w-3 h-3 mr-1" /> Новый
               </Button>
             </div>
 
-            <AnimatePresence>
-              {showNewChannel && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                >
-                  <Card className="border-primary/20 mb-4">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">Создать канал</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-sm font-medium mb-1.5 block">Название канала</label>
-                          <Input
-                            placeholder="Например: Чат с Ваней"
-                            value={newChannelName}
-                            onChange={e => setNewChannelName(e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-sm font-medium mb-1.5 block">Раунды шифрования</label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={32}
-                            value={newChannelRounds}
-                            onChange={e => setNewChannelRounds(parseInt(e.target.value) || 4)}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium mb-1.5 block">Описание (необязательно)</label>
-                        <Input
-                          placeholder="Для чего этот канал..."
-                          value={newChannelDesc}
-                          onChange={e => setNewChannelDesc(e.target.value)}
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button onClick={handleCreateChannel} disabled={loading || !newChannelName.trim()}>
-                          Создать
-                        </Button>
-                        <Button variant="ghost" onClick={() => setShowNewChannel(false)}>Отмена</Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {showNewChat && (
+              <div className="border border-black p-3 flex gap-2">
+                <Input placeholder="Чат с Ваней" value={newChatName} onChange={e => setNewChatName(e.target.value)} className="border-black text-xs" />
+                <Button onClick={handleCreateChat} disabled={!newChatName.trim()} size="sm" className="bg-black text-white">OK</Button>
+                <Button onClick={() => setShowNewChat(false)} variant="ghost" size="sm">Отмена</Button>
+              </div>
+            )}
 
-            {channels.length === 0 ? (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground">
-                  <Layers className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                  <p>У вас пока нет каналов</p>
-                  <p className="text-xs mt-1">Создайте канал для начала шифрования</p>
-                </CardContent>
-              </Card>
+            {chats.length === 0 ? (
+              <p className="text-xs text-neutral-400 py-8 text-center border border-dashed border-neutral-300">Нет чатов</p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {channels.map(ch => (
-                  <Card key={ch.id} className="group hover:border-primary/30 transition-colors">
-                    <CardHeader className="pb-2">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <CardTitle className="text-sm">{ch.name}</CardTitle>
-                          {ch.description && (
-                            <CardDescription className="text-xs mt-1">{ch.description}</CardDescription>
-                          )}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteChannel(ch.id)}
-                          className="opacity-0 group-hover:opacity-100 h-7 w-7 p-0 text-destructive"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                        <Badge variant="outline" className="text-xs">{ch.rounds} раундов</Badge>
-                        <span>{ch._count.encryptionLogs} оп.</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground/60 mt-2">
-                        Создан {new Date(ch.createdAt).toLocaleDateString('ru-RU')}
-                      </p>
-                    </CardContent>
-                  </Card>
+              <div className="space-y-1">
+                {chats.map(ch => (
+                  <div key={ch.id} className="flex items-center justify-between p-2.5 border border-neutral-200 hover:border-black transition-colors group">
+                    <div>
+                      <span className="text-xs font-medium">{ch.name}</span>
+                      <span className="text-[10px] text-neutral-400 ml-2">{ch._count.encryptionLogs} оп.</span>
+                    </div>
+                    <button onClick={() => handleDeleteChat(ch.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-neutral-100">
+                      <Trash2 className="w-3 h-3 text-neutral-400" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
-          </TabsContent>
+          </div>
+        )}
 
-          {/* ========== API KEYS TAB ========== */}
-          <TabsContent value="api-keys" className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">API-ключи</h2>
-                <p className="text-sm text-muted-foreground">Используйте для встраивания шифрования в ваши проекты</p>
+        {/* ===== API KEYS TAB ===== */}
+        {tab === 'keys' && (
+          <div className="space-y-4">
+            <p className="text-xs font-medium">API-КЛЮЧИ</p>
+
+            {createdKey && (
+              <div className="border-2 border-black p-3">
+                <p className="text-[10px] font-medium mb-1">СОХРАНИТЕ КЛЮЧ — БОЛЬШЕ НЕ ПОКАЖЕТСЯ</p>
+                <div className="p-2 bg-neutral-50 font-mono text-[10px] break-all">{createdKey}</div>
+                <Button size="sm" variant="outline" onClick={() => { copy(createdKey); setCreatedKey(''); }} className="mt-2 border-black text-xs">
+                  <Copy className="w-3 h-3 mr-1" /> Копировать и закрыть
+                </Button>
               </div>
-            </div>
-
-            {createdApiKey && (
-              <Card className="border-primary/20">
-                <CardContent className="pt-6 space-y-3">
-                  <div className="flex items-center gap-2 text-primary font-medium text-sm">
-                    <Check className="w-4 h-4" />
-                    Новый API-ключ создан! Сохраните его:
-                  </div>
-                  <div className="p-3 rounded-lg bg-muted font-mono text-xs break-all">{createdApiKey}</div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => copyToClipboard(createdApiKey)}>
-                      <Copy className="w-3 h-3 mr-1.5" /> Копировать ключ
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setCreatedApiKey('')}>
-                      Закрыть
-                    </Button>
-                  </div>
-                  <p className="text-xs text-destructive">
-                    Этот ключ больше не будет показан. Сохраните его сейчас!
-                  </p>
-                </CardContent>
-              </Card>
             )}
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Создать новый ключ</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Название ключа (например: Мой бот)"
-                    value={newKeyName}
-                    onChange={e => setNewKeyName(e.target.value)}
-                    className="max-w-xs"
-                  />
-                  <Button onClick={handleCreateApiKey} disabled={!newKeyName.trim()}>
-                    <Plus className="w-4 h-4 mr-1.5" /> Создать
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            <div className="flex gap-2">
+              <Input placeholder="Название ключа" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} className="border-black text-xs max-w-xs" />
+              <Button onClick={handleCreateKey} disabled={!newKeyName.trim()} size="sm" className="bg-black text-white">
+                <Plus className="w-3 h-3 mr-1" /> Создать
+              </Button>
+            </div>
 
             {apiKeys.length === 0 ? (
-              <Card>
-                <CardContent className="py-12 text-center text-muted-foreground">
-                  <Key className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                  <p>Нет API-ключей</p>
-                  <p className="text-xs mt-1">Создайте ключ для доступа к API</p>
-                </CardContent>
-              </Card>
+              <p className="text-xs text-neutral-400 py-6 text-center border border-dashed border-neutral-300">Нет ключей</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-1">
                 {apiKeys.map(k => (
-                  <Card key={k.id} className="group">
-                    <CardContent className="py-3 px-4 flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-                          <Key className="w-4 h-4 text-primary" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium">{k.name}</div>
-                          <div className="text-xs text-muted-foreground font-mono">{k.keyPrefix}</div>
-                        </div>
+                  <div key={k.id} className="flex items-center justify-between p-2.5 border border-neutral-200 group">
+                    <div className="flex items-center gap-2">
+                      <Key className="w-3 h-3" />
+                      <div>
+                        <span className="text-xs">{k.name}</span>
+                        <span className="text-[10px] text-neutral-400 font-mono ml-2">{k.keyPrefix}</span>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-xs text-muted-foreground hidden sm:block">
-                          {k.lastUsed ? `Использован ${new Date(k.lastUsed).toLocaleDateString('ru-RU')}` : 'Никогда не использован'}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteApiKey(k.id)}
-                          className="h-7 w-7 p-0 text-destructive opacity-0 group-hover:opacity-100"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                    </div>
+                    <button onClick={() => handleDeleteKey(k.id)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-neutral-100">
+                      <Trash2 className="w-3 h-3 text-neutral-400" />
+                    </button>
+                  </div>
                 ))}
               </div>
             )}
-          </TabsContent>
+          </div>
+        )}
 
-          {/* ========== DOCS TAB ========== */}
-          <TabsContent value="docs" className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Terminal className="w-5 h-5 text-primary" />
-                API Документация
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Открытое API для встраивания шифрования в ваши проекты
-              </p>
-            </div>
+        {/* ===== DOCS TAB ===== */}
+        {tab === 'docs' && (
+          <div className="space-y-4 max-w-2xl">
+            <p className="text-xs font-medium">API ДОКУМЕНТАЦИЯ</p>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Авторизация</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <p>Все API-запросы требуют авторизации через заголовок:</p>
-                <div className="p-3 rounded-lg bg-muted font-mono text-xs">
-                  X-API-Key: qs_XXXXXXXX_...
+            {[
+              { method: 'POST', path: '/api/encrypt', desc: 'Зашифровать', body: '{\n  "data": "Секретное сообщение",\n  "chatId": "clxxxxx..."\n}', response: '{\n  "encrypted": "base64url...",\n  "chain": ["ssl","tls","binary"],\n  "version": 2\n}' },
+              { method: 'POST', path: '/api/decrypt', desc: 'Дешифровать', body: '{\n  "encrypted": "base64url...",\n  "chatId": "clxxxxx...",\n  "chain": ["ssl","tls","binary"]\n}', response: '{\n  "decrypted": "Секретное сообщение"\n}' },
+              { method: 'GET', path: '/api/channels', desc: 'Список чатов', body: null, response: '{\n  "chats": [{ "id": "...", "name": "..." }]\n}' },
+            ].map(api => (
+              <div key={api.path} className="border border-neutral-200 p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Badge variant="outline" className="text-[10px] font-mono border-black">{api.method}</Badge>
+                  <span className="text-xs font-mono font-medium">{api.path}</span>
+                  <span className="text-[10px] text-neutral-400">{api.desc}</span>
                 </div>
-                <p className="text-muted-foreground">API-ключи создаются на вкладке &quot;API-ключи&quot; в дашборде.</p>
-              </CardContent>
-            </Card>
+                <p className="text-[10px] text-neutral-400 mb-1">Header: X-API-Key: qs_XXXXXXXX_...</p>
+                {api.body && (
+                  <>
+                    <p className="text-[10px] font-medium mt-2">Body:</p>
+                    <pre className="text-[10px] font-mono p-2 bg-neutral-50 border border-neutral-200 mt-1">{api.body}</pre>
+                  </>
+                )}
+                <p className="text-[10px] font-medium mt-2">Response:</p>
+                <pre className="text-[10px] font-mono p-2 bg-neutral-50 border border-neutral-200 mt-1">{api.response}</pre>
+              </div>
+            ))}
+          </div>
+        )}
 
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-green-600">POST</Badge>
-                  <CardTitle className="text-base">/api/encrypt</CardTitle>
-                </div>
-                <CardDescription>Зашифровать данные для указанного канала</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="space-y-2">
-                  <p className="font-medium">Headers:</p>
-                  <div className="p-3 rounded-lg bg-muted font-mono text-xs space-y-1">
-                    <div>Content-Type: application/json</div>
-                    <div>X-API-Key: qs_XXXXXXXX_...</div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <p className="font-medium">Body:</p>
-                  <pre className="p-3 rounded-lg bg-muted font-mono text-xs overflow-x-auto">{`{
-  "data": "Секретное сообщение",
-  "channelId": "clxxxxx..."
-}`}</pre>
-                </div>
-                <div className="space-y-2">
-                  <p className="font-medium">Response:</p>
-                  <pre className="p-3 rounded-lg bg-muted font-mono text-xs overflow-x-auto">{`{
-  "encrypted": "base64url-encoded-ciphertext...",
-  "rounds": 4,
-  "version": 1,
-  "channelId": "clxxxxx..."
-}`}</pre>
-                </div>
-              </CardContent>
-            </Card>
+        {/* ===== INFO TAB ===== */}
+        {tab === 'info' && (
+          <div className="space-y-3 max-w-xl">
+            <p className="text-xs font-medium">О ШИФРОВАНИИ</p>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-green-600">POST</Badge>
-                  <CardTitle className="text-base">/api/decrypt</CardTitle>
-                </div>
-                <CardDescription>Расшифровать данные для указанного канала</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="space-y-2">
-                  <p className="font-medium">Body:</p>
-                  <pre className="p-3 rounded-lg bg-muted font-mono text-xs overflow-x-auto">{`{
-  "encrypted": "base64url-encoded-ciphertext...",
-  "channelId": "clxxxxx...",
-  "rounds": 4
-}`}</pre>
-                </div>
-                <div className="space-y-2">
-                  <p className="font-medium">Response:</p>
-                  <pre className="p-3 rounded-lg bg-muted font-mono text-xs overflow-x-auto">{`{
-  "decrypted": "Секретное сообщение",
-  "channelId": "clxxxxx..."
-}`}</pre>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-blue-600">GET</Badge>
-                  <CardTitle className="text-base">/api/channels</CardTitle>
-                </div>
-                <CardDescription>Получить список каналов (требует JWT или API-ключ)</CardDescription>
-              </CardHeader>
-              <CardContent className="text-sm">
-                <pre className="p-3 rounded-lg bg-muted font-mono text-xs overflow-x-auto">{`{
-  "channels": [
-    {
-      "id": "clxxxxx...",
-      "name": "Чат с Ваней",
-      "rounds": 4,
-      "createdAt": "2025-01-01T00:00:00.000Z"
-    }
-  ]
-}`}</pre>
-              </CardContent>
-            </Card>
-
-            <Card className="border-primary/20">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Shield className="w-4 h-4 text-primary" />
-                  О безопасности
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="text-sm space-y-2 text-muted-foreground">
-                <p><strong className="text-foreground">Алгоритм:</strong> AES-256-GCM с циклическим многослойным шифрованием</p>
-                <p><strong className="text-foreground">Деривация ключей:</strong> PBKDF2-SHA512 (200k итераций на канал, 100k на раунд)</p>
-                <p><strong className="text-foreground">Хеширование паролей:</strong> Argon2id (64MB, memory-hard, квантово-устойчивый)</p>
-                <p><strong className="text-foreground">Квантовая устойчивость:</strong> 256-битный AES при атаке Гровера сохраняет 128-битную защиту. Многослойное шифрование экспоненциально увеличивает стоимость атаки.</p>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+            {[
+              { label: 'Метод', value: 'Цепочечное: unicode → binary → decimal → TLS → SSL (рандомный порядок)' },
+              { label: 'Внешний слой', value: 'AES-256-GCM (квантовая устойчивость)' },
+              { label: 'Деривация ключей', value: 'PBKDF2-SHA512 (600k пароль, 100k AES, 50k на метод цепочки)' },
+              { label: 'Хеширование паролей', value: 'Argon2id (64MB, memory-hard) — пароль шифруется через сервис' },
+              { label: 'Длина цепочки', value: '5-10 методов (рандомная)' },
+              { label: 'Лимиты', value: '90 000 / день, 200 000 / месяц' },
+              { label: 'Квантовая устойчивость', value: 'AES-256 при Гровере = 128 бит + Argon2id memory-hard + структурная сложность цепочки' },
+            ].map(item => (
+              <div key={item.label} className="border-b border-neutral-100 pb-2">
+                <span className="text-[10px] text-neutral-400">{item.label}</span>
+                <p className="text-xs">{item.value}</p>
+              </div>
+            ))}
+          </div>
+        )}
       </main>
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-border/50 py-4">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5 text-primary" />
-            QuantumShield · Квантово-устойчивое шифрование
-          </span>
-          <span className="flex items-center gap-3">
-            <span>AES-256-GCM</span>
-            <Separator orientation="vertical" className="h-3" />
-            <span>Argon2id</span>
-            <Separator orientation="vertical" className="h-3" />
-            <span>Open API</span>
-          </span>
+      <footer className="mt-auto border-t border-neutral-200 py-3">
+        <div className="max-w-5xl mx-auto px-4 flex items-center justify-between text-[10px] text-neutral-400">
+          <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> QuantumShield v2</span>
+          <span>AES-256 · Argon2id · Chain</span>
         </div>
       </footer>
     </div>
-  );
-
-  // ============================================================
-  // Main render
-  // ============================================================
-  return (
-    <AnimatePresence mode="wait">
-      {(view === 'dashboard' && session) ? renderDashboard() : renderAuth()}
-    </AnimatePresence>
   );
 }
