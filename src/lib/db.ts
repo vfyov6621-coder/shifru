@@ -255,17 +255,34 @@ function createDB(): ShifruDB {
   const tursoUrl = process.env.TURSO_DATABASE_URL;
   const tursoToken = process.env.TURSO_AUTH_TOKEN;
 
-  if (tursoUrl) {
-    const client = createClient({
-      url: tursoUrl,
-      authToken: tursoToken || '',
-    });
-    return new ShifruDB(client);
+  if (!tursoUrl) {
+    throw new Error('TURSO_DATABASE_URL not set');
   }
 
-  // Fallback: shouldn't happen in production
-  throw new Error('TURSO_DATABASE_URL not set');
+  const client = createClient({
+    url: tursoUrl,
+    authToken: tursoToken || '',
+  });
+  return new ShifruDB(client);
 }
 
-export const db = globalForDb.db ?? createDB();
-if (process.env.NODE_ENV !== 'production') globalForDb.db = db;
+// Lazy init — connect only on first actual API call, not at build time
+let _db: ShifruDB | undefined;
+function getDB(): ShifruDB {
+  if (!_db) {
+    _db = createDB();
+    if (process.env.NODE_ENV !== 'production') {
+      (globalThis as any).db = _db;
+    }
+  }
+  return _db;
+}
+
+export const db = new Proxy({} as ShifruDB, {
+  get(_target, prop) {
+    const instance = getDB();
+    const val = (instance as any)[prop];
+    if (typeof val === 'function') return val.bind(instance);
+    return val;
+  },
+});
