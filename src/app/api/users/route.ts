@@ -11,15 +11,18 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const search = searchParams.get('search') || '';
 
-    const users = await db.user.findMany({
-      where: {
-        id: { not: session.userId },
-        isVerified: true,
-        ...(search ? { login: { contains: search } } : {}),
-      },
-      select: { id: true, login: true },
-      take: 20,
-    });
+    let sql = 'SELECT id, login FROM "User" WHERE id != ? AND "isVerified" = 1';
+    const args: any[] = [session.userId];
+
+    if (search) {
+      sql += ' AND login LIKE ?';
+      args.push(`%${search}%`);
+    }
+
+    sql += ' LIMIT 20';
+
+    const r = await db.execute(sql, args);
+    const users = r.rows.map((row: any) => ({ id: row.id, login: row.login }));
 
     return NextResponse.json({ users });
   } catch (error) {

@@ -121,14 +121,25 @@ export async function adminUnverifyUser(adminId: string, targetUserId: string): 
 
 export async function getUserByApiKey(apiKey: string) {
   const keyHash = hashApiKey(apiKey);
-  const record = await db.apiKey.findUnique({
-    where: { keyHash },
-    include: { user: true },
-  });
+  const r = await db.execute(
+    'SELECT * FROM "ApiKey" WHERE "keyHash" = ?',
+    [keyHash]
+  );
+  const record = r.rows[0];
   if (!record) return null;
-  if (!record.user.isVerified) return null;
-  await db.apiKey.update({ where: { id: record.id }, data: { lastUsed: new Date() } });
-  return record.user;
+
+  // Get user manually
+  const userRow = await db.user.findUnique({ where: { id: record.userId as string } });
+  if (!userRow) return null;
+  if (!userRow.isVerified) return null;
+
+  // Update lastUsed
+  await db.execute(
+    'UPDATE "ApiKey" SET "lastUsed" = datetime(\'now\') WHERE id = ?',
+    [record.id]
+  );
+
+  return userRow;
 }
 
 // ============================================================
@@ -231,8 +242,8 @@ export async function checkRateLimit(userId: string): Promise<{ allowed: boolean
   const monthKey = now.toISOString().slice(0, 7);
 
   const [daily, monthly] = await Promise.all([
-    db.rateLimit.findUnique({ where: { userId_period_periodKey: { userId, period: 'daily', periodKey: dayKey } } }),
-    db.rateLimit.findUnique({ where: { userId_period_periodKey: { userId, period: 'monthly', periodKey: monthKey } } }),
+    db.rateLimit.findFirst({ where: { userId, period: 'daily', periodKey: dayKey } }),
+    db.rateLimit.findFirst({ where: { userId, period: 'monthly', periodKey: monthKey } }),
   ]);
 
   const dailyCount = daily?.count ?? 0;
@@ -252,12 +263,12 @@ export async function incrementRateLimit(userId: string): Promise<void> {
 
   await Promise.all([
     db.rateLimit.upsert({
-      where: { userId_period_periodKey: { userId, period: 'daily', periodKey: dayKey } },
+      where: { userId, period: 'daily', periodKey: dayKey },
       create: { userId, period: 'daily', periodKey: dayKey, count: 1 },
       update: { count: { increment: 1 } },
     }),
     db.rateLimit.upsert({
-      where: { userId_period_periodKey: { userId, period: 'monthly', periodKey: monthKey } },
+      where: { userId, period: 'monthly', periodKey: monthKey },
       create: { userId, period: 'monthly', periodKey: monthKey, count: 1 },
       update: { count: { increment: 1 } },
     }),

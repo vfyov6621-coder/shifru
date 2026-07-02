@@ -13,15 +13,41 @@ export async function GET(req: NextRequest) {
     }
 
     const users = await db.user.findMany({
-      select: {
-        id: true, login: true, isVerified: true, isAdmin: true,
-        createdAt: true,
-        _count: { select: { chats: true, apiKeys: true, encryptionLogs: true } },
-      },
       orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ users });
+    // Enrich with counts
+    const enriched = await Promise.all(users.map(async (u: any) => {
+      const chatCount = (await db.execute(
+        'SELECT COUNT(*) as c FROM "_ChatToUser" WHERE "B" = ?',
+        [u.id]
+      )).rows[0]?.c ?? 0;
+
+      const apiKeyCount = (await db.execute(
+        'SELECT COUNT(*) as c FROM "ApiKey" WHERE "userId" = ?',
+        [u.id]
+      )).rows[0]?.c ?? 0;
+
+      const encLogCount = (await db.execute(
+        'SELECT COUNT(*) as c FROM "EncryptionLog" WHERE "userId" = ?',
+        [u.id]
+      )).rows[0]?.c ?? 0;
+
+      return {
+        id: u.id,
+        login: u.login,
+        isVerified: u.isVerified,
+        isAdmin: u.isAdmin,
+        createdAt: u.createdAt,
+        _count: {
+          chats: Number(chatCount),
+          apiKeys: Number(apiKeyCount),
+          encryptionLogs: Number(encLogCount),
+        },
+      };
+    }));
+
+    return NextResponse.json({ users: enriched });
   } catch (error) {
     console.error('Admin users error:', error);
     return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });

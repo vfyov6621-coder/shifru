@@ -7,17 +7,39 @@ export async function GET(req: NextRequest) {
     const session = await getSessionUser(req);
     if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
+    // Get chats where user is a member
     const chats = await db.chat.findMany({
       where: { members: { some: { id: session.userId } } },
-      select: {
-        id: true, name: true, isGroup: true, createdAt: true,
-        _count: { select: { encryptionLogs: true, members: true } },
-        members: { select: { id: true, login: true } },
-      },
-      orderBy: { createdAt: 'desc' },
     });
 
-    return NextResponse.json({ chats });
+    // For each chat, get member logins and counts
+    const enriched = await Promise.all(chats.map(async (chat: any) => {
+      const members = await db.execute(
+        `SELECT u.id, u.login FROM "User" u
+         INNER JOIN "_ChatToUser" ctu ON ctu."B" = u.id
+         WHERE ctu."A" = ?`,
+        [chat.id]
+      );
+
+      const logCount = (await db.execute(
+        'SELECT COUNT(*) as c FROM "EncryptionLog" WHERE "chatId" = ?',
+        [chat.id]
+      )).rows[0]?.c ?? 0;
+
+      return {
+        id: chat.id,
+        name: chat.name,
+        isGroup: Boolean(chat.isGroup),
+        createdAt: chat.createdAt,
+        _count: {
+          encryptionLogs: Number(logCount),
+          members: members.rows.length,
+        },
+        members: members.rows.map((r: any) => ({ id: r.id, login: r.login })),
+      };
+    }));
+
+    return NextResponse.json({ chats: enriched });
   } catch (error) {
     console.error('Get chats error:', error);
     return NextResponse.json({ error: 'Ошибка сервера' }, { status: 500 });
