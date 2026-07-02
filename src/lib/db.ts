@@ -1,4 +1,5 @@
 import { createClient, type Client } from '@libsql/client';
+import { randomBytes } from 'crypto';
 
 const globalForDb = globalThis as unknown as {
   db: ShifruDB | undefined
@@ -90,17 +91,18 @@ class ShifruDB {
         return r.rows[0] ? this.mapRow(r.rows[0], 'Chat', null) : null;
       },
       create: async ({ data, include }: { data: any; include?: any }) => {
-        const cols = Object.keys(data).map(k => `"${k}"`).join(', ');
-        const placeholders = Object.keys(data).map(() => '?').join(', ');
-        const vals = Object.values(data);
-        await this.client.execute({ sql: `INSERT INTO "Chat" (${cols}) VALUES (${placeholders})`, args: vals });
+        const id = data.id || randomBytes(12).toString('hex');
+        const allData = { ...data, id };
+        const cols = Object.keys(allData).map(k => `"${k}"`).join(', ');
+        const placeholders = Object.keys(allData).map(() => '?').join(', ');
+        await this.client.execute({ sql: `INSERT INTO "Chat" (${cols}) VALUES (${placeholders})`, args: Object.values(allData) });
         // Handle members relation
         if (data.members?.connect) {
           for (const m of data.members.connect) {
-            await this.client.execute({ sql: 'INSERT OR IGNORE INTO "_ChatToUser" ("A", "B") VALUES (?, ?)', args: [data.id || vals[0], m.id] });
+            await this.client.execute({ sql: 'INSERT OR IGNORE INTO "_ChatToUser" ("A", "B") VALUES (?, ?)', args: [id, m.id] });
           }
         }
-        return this.chat.findFirst({ where: { id: data.id || vals[0] } });
+        return this.chat.findFirst({ where: { id } });
       },
       delete: async ({ where }: { where: { id: string } }) => {
         await this.client.execute({ sql: 'DELETE FROM "Chat" WHERE id = ?', args: [where.id] });
@@ -117,10 +119,12 @@ class ShifruDB {
         return r.rows.map((row: any) => this.mapRow(row, 'ApiKey', select));
       },
       create: async ({ data }: { data: any }) => {
-        const cols = Object.keys(data).map(k => `"${k}"`).join(', ');
-        const placeholders = Object.keys(data).map(() => '?').join(', ');
-        await this.client.execute({ sql: `INSERT INTO "ApiKey" (${cols}) VALUES (${placeholders})`, args: Object.values(data) });
-        return { id: 'created', ...data };
+        const id = data.id || randomBytes(12).toString('hex');
+        const allData = { ...data, id };
+        const cols = Object.keys(allData).map(k => `"${k}"`).join(', ');
+        const placeholders = Object.keys(allData).map(() => '?').join(', ');
+        await this.client.execute({ sql: `INSERT INTO "ApiKey" (${cols}) VALUES (${placeholders})`, args: Object.values(allData) });
+        return { id, ...allData };
       },
       findFirst: async ({ where }: { where: any }) => {
         const r = await this.client.execute({ sql: 'SELECT * FROM "ApiKey" WHERE id = ? AND "userId" = ?', args: [where.id, where.userId] });
@@ -136,10 +140,12 @@ class ShifruDB {
   get encryptionLog() {
     return {
       create: async ({ data }: { data: any }) => {
-        const cols = Object.keys(data).map(k => `"${k}"`).join(', ');
-        const placeholders = Object.keys(data).map(() => '?').join(', ');
-        await this.client.execute({ sql: `INSERT INTO "EncryptionLog" (${cols}) VALUES (${placeholders})`, args: Object.values(data) });
-        return { id: 'logged', ...data };
+        const id = data.id || randomBytes(12).toString('hex');
+        const allData = { ...data, id };
+        const cols = Object.keys(allData).map(k => `"${k}"`).join(', ');
+        const placeholders = Object.keys(allData).map(() => '?').join(', ');
+        await this.client.execute({ sql: `INSERT INTO "EncryptionLog" (${cols}) VALUES (${placeholders})`, args: Object.values(allData) });
+        return { id, ...allData };
       },
     };
   }
